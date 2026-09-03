@@ -123,7 +123,7 @@ class FaceRegistry:
         with self._lock:
             if person_id in self._profiles:
                 raise FileExistsError(f"A profile with ID {person_id} already exists.")
-            self._profiles[person_id] = {
+            profile = {
                 "person_id": person_id,
                 "name": name,
                 "embedding": vector.astype(float).tolist(),
@@ -131,8 +131,13 @@ class FaceRegistry:
                 "enrolled_at": now,
                 "updated_at": now,
             }
-            self._save()
-            return self._public_profile(self._profiles[person_id])
+            self._profiles[person_id] = profile
+            try:
+                self._save()
+            except FaceServiceError:
+                self._profiles.pop(person_id, None)
+                raise
+            return self._public_profile(profile)
 
     def replace_embedding(self, person_id: str, embedding: np.ndarray) -> dict[str, Any]:
         person_id = validate_person_id(person_id)
@@ -141,10 +146,15 @@ class FaceRegistry:
             profile = self._profiles.get(person_id)
             if profile is None:
                 raise KeyError(person_id)
+            previous = deepcopy(profile)
             profile["embedding"] = vector.astype(float).tolist()
             profile["embedding_model"] = EMBEDDING_MODEL_VERSION
             profile["updated_at"] = datetime.now(timezone.utc).isoformat()
-            self._save()
+            try:
+                self._save()
+            except FaceServiceError:
+                self._profiles[person_id] = previous
+                raise
             return self._public_profile(profile)
 
     def delete(self, person_id: str) -> bool:

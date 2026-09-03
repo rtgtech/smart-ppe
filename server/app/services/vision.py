@@ -132,6 +132,17 @@ def require_face_services() -> tuple[FaceEngine, FaceRegistry]:
     return face_engine, face_registry
 
 
+def require_face_registry() -> FaceRegistry:
+    """Return the registry without coupling data deletion to model readiness."""
+    global face_registry
+    if face_registry is None:
+        try:
+            face_registry = FaceRegistry(FACE_REGISTRY_PATH)
+        except FaceServiceError as exc:
+            raise HTTPException(status_code=503, detail=f"Face registry is unavailable: {exc}") from exc
+    return face_registry
+
+
 @router.get("/api/faces")
 async def list_faces() -> dict[str, Any]:
     _, registry = require_face_services()

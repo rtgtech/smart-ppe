@@ -18,19 +18,28 @@ export async function request(path, options = {}) {
 }
 
 export async function apiRequest(path, options = {}) {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers = {
+    ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.headers || {}),
+  };
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    headers,
   });
 
   if (!res.ok) {
     let detail = `SURAKSHA API error ${res.status}: ${path}`;
     try {
       const body = await res.json();
-      detail = body.detail || detail;
+      detail = Array.isArray(body.detail)
+        ? body.detail.map((issue) => issue?.msg).filter(Boolean).join('; ') || detail
+        : body.detail || detail;
     } catch {
     }
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = res.status;
+    throw error;
   }
 
   if (res.status === 204) return null;

@@ -16,6 +16,7 @@ DEFAULT_WORKERS = [
 ]
 
 WORKER_SEED_KEY = "initial-demo-workers-v1"
+PPE_SEED_KEY = "ppe-demo-v2"
 
 
 def create_tables() -> None:
@@ -73,7 +74,11 @@ def seed_initial_data(db: Session) -> None:
             db.add(SafetyScore(worker_id=worker.worker_id, score=score, risk_level=risk, violation_count=violations, compliance_rate=score))
 
     db.commit()
-    seed_ppe_demo_data(db)
+
+    if db.get(SeedState, PPE_SEED_KEY) is None:
+        seed_ppe_demo_data(db)
+        db.add(SeedState(key=PPE_SEED_KEY))
+        db.commit()
 
 
 def init_db() -> None:

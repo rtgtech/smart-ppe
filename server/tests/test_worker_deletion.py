@@ -1,15 +1,17 @@
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
+from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.v1.routes.workers import delete_worker
+from app.api.v1.routes.workers import create_worker_with_face, delete_worker
 from app.models import (
     Alert,
     AttendanceLog,
@@ -26,10 +28,99 @@ from app.models import (
     Worker,
     WorkerPpe,
 )
-from app.services.face_recognition import FaceRegistry
+from app.services.face_recognition import FaceRegistry, FaceServiceError
+
+
+class RejectingFaceEngine:
+    def enrollment_embedding(self, _captures):
+        raise FaceServiceError("Capture 2 is invalid: no face was detected; exactly one is required.")
+
+
+class AcceptingFaceEngine:
+    def enrollment_embedding(self, _captures):
+        return np.array([1.0, 0.0], dtype=np.float32)
 
 
 class WorkerDeletionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_registry_write_failure_does_not_leave_duplicate_in_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = FaceRegistry(Path(directory) / "faces.json")
+            with (
+                patch.object(registry, "_save", side_effect=FaceServiceError("Could not save face registry")),
+                self.assertRaises(FaceServiceError),
+            ):
+                registry.create("WRITE_FAIL", "Write Failure", np.array([1.0, 0.0], dtype=np.float32))
+            self.assertEqual(registry.count(), 0)
+
+    async def test_successful_face_capture_creates_worker_and_profile_together(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        mine = Mine(name="Test Mine", location="Test", status="ACTIVE")
+        session.add(mine)
+        session.flush()
+        department = Department(mine_id=mine.mine_id, name="Test Department")
+        session.add(department)
+        session.commit()
+        payload = json.dumps({
+            "employee_code": "FACE_OK",
+            "name": "Face Success",
+            "department_id": department.department_id,
+            "status": "ACTIVE",
+        })
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry = FaceRegistry(Path(directory) / "faces.json")
+            with (
+                patch("app.api.v1.routes.workers.require_face_services", return_value=(AcceptingFaceEngine(), registry)),
+                patch("app.api.v1.routes.workers.read_registration_images", new=AsyncMock(return_value=[object()] * 5)),
+            ):
+                response = await create_worker_with_face(payload, [object()] * 5, session)
+
+            self.assertEqual(response.employee_code, "FACE_OK")
+            self.assertEqual(registry.count(), 1)
+            self.assertEqual(session.query(Worker).count(), 1)
+        session.close()
+
+    async def test_failed_face_capture_does_not_insert_worker(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        mine = Mine(name="Test Mine", location="Test", status="ACTIVE")
+        session.add(mine)
+        session.flush()
+        department = Department(mine_id=mine.mine_id, name="Test Department")
+        session.add(department)
+        session.commit()
+
+        payload = json.dumps({
+            "employee_code": "FACE_FAIL",
+            "name": "Face Failure",
+            "department_id": department.department_id,
+            "status": "ACTIVE",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            registry = FaceRegistry(Path(directory) / "faces.json")
+            with (
+                patch("app.api.v1.routes.workers.require_face_services", return_value=(RejectingFaceEngine(), registry)),
+                patch("app.api.v1.routes.workers.read_registration_images", new=AsyncMock(return_value=[object()] * 5)),
+                self.assertRaises(HTTPException) as caught,
+            ):
+                await create_worker_with_face(payload, [object()] * 5, session)
+
+            self.assertEqual(caught.exception.status_code, 422)
+            self.assertEqual(registry.count(), 0)
+            self.assertEqual(session.query(Worker).count(), 0)
+        session.close()
+
     async def test_delete_removes_worker_relations_and_face_profile(self):
         engine = create_engine(
             "sqlite://",
@@ -90,7 +181,7 @@ class WorkerDeletionTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             registry = FaceRegistry(Path(directory) / "faces.json")
             registry.create("DELETE_TEST", "Delete Test", np.array([1.0, 0.0], dtype=np.float32))
-            with patch("app.api.v1.routes.workers.require_face_services", return_value=(object(), registry)):
+            with patch("app.api.v1.routes.workers.require_face_registry", return_value=registry):
                 response = await delete_worker(worker.worker_id, session)
 
             self.assertEqual(response.status, "DELETED")

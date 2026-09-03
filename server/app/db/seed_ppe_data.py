@@ -1,7 +1,7 @@
 """Deterministic demonstration data for the PPE dashboard.
 
-The records are intentionally repeatable: starting the API more than once does
-not duplicate assignments, compliance checks, or attendance entries.
+This module is invoked once for a new demo database. It is deliberately kept
+out of normal startup reconciliation so later operator edits are preserved.
 """
 
 from datetime import datetime, time, timedelta, timezone
@@ -197,5 +197,3 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
                     exit_time=entry_time + timedelta(hours=8) if check_date < today else None,
                     status="OUTSIDE" if check_date < today or detected_count < len(detection_rows) else "INSIDE",
                 ))
-
-    db.commit()

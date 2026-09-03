@@ -3,9 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { PageHeader, Badge, Button } from '../components/ui';
 import FaceEnrollment from '../components/FaceEnrollment';
-import { deleteFace, registerFace } from '../services/faces';
 import {
-  createWorker,
+  createWorkerWithFace,
   deleteWorker,
   listWorkerDepartments,
   listWorkers,
@@ -33,6 +32,7 @@ export default function Workers() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [modalError, setModalError] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [faceCaptures, setFaceCaptures] = useState([]);
@@ -76,6 +76,7 @@ export default function Workers() {
     setFaceCaptures([]);
     setModal({ mode: 'create', worker: null });
     setError('');
+    setModalError('');
   }
 
   function openEdit(worker) {
@@ -92,6 +93,7 @@ export default function Workers() {
     setModal({ mode: 'edit', worker });
     setFaceCaptures([]);
     setError('');
+    setModalError('');
   }
 
   function closeModal() {
@@ -99,6 +101,7 @@ export default function Workers() {
     setForm(EMPTY_FORM);
     setFaceCaptures([]);
     setSaving(false);
+    setModalError('');
   }
 
   function setField(field, value) {
@@ -121,26 +124,15 @@ export default function Workers() {
   async function submitWorker(e) {
     e.preventDefault();
     if (modal.mode === 'create' && faceCaptures.length !== 5) {
-      setError('Capture all five face images before creating the worker.');
+      setModalError('Capture all five face images before creating the worker.');
       return;
     }
     setSaving(true);
-    setError('');
+    setModalError('');
     try {
       const payload = buildPayload();
       if (modal.mode === 'create') {
-        await registerFace(payload.employee_code, payload.name, faceCaptures);
-        let created;
-        try {
-          created = await createWorker(payload);
-        } catch (workerError) {
-          try {
-            await deleteFace(payload.employee_code);
-          } catch {
-            throw new Error(`${workerError.message || 'Unable to save worker.'} The temporary face profile could not be removed; contact an administrator before retrying.`);
-          }
-          throw workerError;
-        }
+        const created = await createWorkerWithFace(payload, faceCaptures);
         setWorkers((prev) => [created, ...prev]);
       } else {
         const updated = await updateWorker(modal.worker.worker_id, payload);
@@ -148,8 +140,15 @@ export default function Workers() {
       }
       closeModal();
     } catch (err) {
-      const message = err.message || 'Unable to save worker.';
-      setError(message);
+      let message = err.message || 'Unable to save worker.';
+      if (err.status === 409) {
+        message = `${message} Use a unique employee code and RFID, or delete the existing face profile before reusing its ID.`;
+      } else if (err.status === 413) {
+        message = 'A face image is too large. Retake the five captures and try again.';
+      } else if (err.status === 503) {
+        message = 'Face recognition is still loading. Wait a moment and submit again.';
+      }
+      setModalError(message);
       setSaving(false);
     }
   }
@@ -294,7 +293,7 @@ export default function Workers() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Employee Code">
-                <input required maxLength={20} pattern="[A-Za-z0-9_-]+" title="Use only letters, numbers, underscores, or hyphens." value={form.employee_code} onChange={(e) => setField('employee_code', e.target.value)} className="field" />
+                <input required disabled={modal.mode === 'edit'} maxLength={20} pattern="[A-Za-z0-9_-]+" title={modal.mode === 'edit' ? 'Employee code cannot be changed after face enrollment.' : 'Use only letters, numbers, underscores, or hyphens.'} value={form.employee_code} onChange={(e) => setField('employee_code', e.target.value)} className="field disabled:cursor-not-allowed disabled:opacity-60" />
               </Field>
               <Field label="Worker Name">
                 <input required maxLength={100} value={form.name} onChange={(e) => setField('name', e.target.value)} className="field" />
@@ -327,6 +326,12 @@ export default function Workers() {
 
             {modal.mode === 'create' && (
               <FaceEnrollment captures={faceCaptures} onChange={setFaceCaptures} disabled={saving} />
+            )}
+
+            {modalError && (
+              <div className="mt-4 rounded-md border border-danger/40 bg-dangerSubtle px-3 py-2.5 text-xs leading-relaxed text-danger" role="alert" aria-live="assertive">
+                {modalError}
+              </div>
             )}
 
             <div className="flex justify-end gap-2 mt-6">

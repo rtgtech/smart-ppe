@@ -321,6 +321,10 @@ body {
   line-height: 1.25rem;
 }
 
+.filter-control.pr-9 {
+  padding-right: 2.25rem;
+}
+
 .filter-control::placeholder {
   color: rgb(var(--color-text-muted));
   opacity: 1;

@@ -1,16 +1,17 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, UploadFile, status
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Alert, AttendanceLog, ComplianceLog, Report, SafetyScore, WorkerPpe
+from app.models import Alert, AttendanceLog, ComplianceLog, Notification, Report, SafetyScore, Worker, WorkerPpe
 from app.schemas.department import DepartmentRead
 from app.schemas.worker import WorkerCreate, WorkerUpdate
 from app.services import workers as worker_service
-from app.services.face_recognition import FaceServiceError
-from app.services.vision import require_face_services
+from app.services.face_recognition import FaceServiceError, validate_name, validate_person_id
+from app.services.vision import read_registration_images, require_face_registry, require_face_services, vision_lock
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -121,11 +122,69 @@ def create_worker(payload: WorkerCreate, db: Session = Depends(get_db)):
     return to_worker_row(db, worker)
 
 
+@router.post("/with-face", response_model=WorkerRow, status_code=status.HTTP_201_CREATED)
+async def create_worker_with_face(
+    worker: str = Form(...),
+    images: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Create the face profile and worker as one coordinated operation."""
+    try:
+        payload = WorkerCreate.model_validate_json(worker)
+        person_id = validate_person_id(payload.employee_code)
+        name = validate_name(payload.name)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=jsonable_encoder(exc.errors())) from exc
+    except FaceServiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    payload = payload.model_copy(update={"employee_code": person_id, "name": name})
+    ensure_unique_worker_fields(db, payload)
+    engine, registry = require_face_services()
+    captures = await read_registration_images(images)
+
+    try:
+        async with vision_lock:
+            embedding = await asyncio.to_thread(engine.enrollment_embedding, captures)
+    except FaceServiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    face_created = False
+    try:
+        record = Worker(**payload.model_dump())
+        db.add(record)
+        db.flush()
+        await asyncio.to_thread(registry.create, person_id, name, embedding)
+        face_created = True
+        response = to_worker_row(db, record)
+        db.commit()
+        return response
+    except FileExistsError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FaceServiceError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        if face_created:
+            try:
+                await asyncio.to_thread(registry.delete, person_id)
+            except FaceServiceError as cleanup_error:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Worker creation failed and the temporary face profile could not be removed.",
+                ) from cleanup_error
+        raise HTTPException(status_code=500, detail="Worker and face profile could not be created.") from exc
+
+
 @router.patch("/{worker_id}", response_model=WorkerRow)
 def update_worker(worker_id: int, payload: WorkerUpdate, db: Session = Depends(get_db)):
     worker = worker_service.get_worker(db, worker_id)
     if worker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
+    if payload.employee_code is not None and payload.employee_code != worker.employee_code:
+        raise HTTPException(status_code=409, detail="Employee code cannot be changed after face enrollment")
     ensure_unique_worker_fields(db, payload, current_worker_id=worker_id)
     worker = worker_service.update_worker(db, worker, payload)
     return to_worker_row(db, worker)
@@ -137,16 +196,23 @@ async def delete_worker(worker_id: int, db: Session = Depends(get_db)):
     if worker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
 
-    _, registry = require_face_services()
+    registry = require_face_registry()
     employee_code = worker.employee_code
     try:
         face_backup = await asyncio.to_thread(registry.profile_snapshot, employee_code)
-    except FaceServiceError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FaceServiceError:
+        # Legacy worker IDs may predate face-ID validation and cannot have a
+        # matching registry profile. Their database records must remain deletable.
+        face_backup = None
 
     face_deleted = False
     try:
-        db.query(Alert).filter(Alert.worker_id == worker_id).delete(synchronize_session=False)
+        log_ids = [row[0] for row in db.query(ComplianceLog.log_id).filter(ComplianceLog.worker_id == worker_id).all()]
+        alert_filter = Alert.worker_id == worker_id
+        if log_ids:
+            alert_filter = alert_filter | Alert.log_id.in_(log_ids)
+        db.query(Alert).filter(alert_filter).delete(synchronize_session=False)
+        db.query(Notification).filter(Notification.recipient_id == worker_id).delete(synchronize_session=False)
         db.query(AttendanceLog).filter(AttendanceLog.worker_id == worker_id).delete(synchronize_session=False)
         db.query(ComplianceLog).filter(ComplianceLog.worker_id == worker_id).delete(synchronize_session=False)
         db.query(WorkerPpe).filter(WorkerPpe.worker_id == worker_id).delete(synchronize_session=False)

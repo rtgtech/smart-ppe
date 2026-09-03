@@ -21,6 +21,18 @@ export function createWorker(payload) {
   });
 }
 
+export function createWorkerWithFace(payload, images) {
+  const form = new FormData();
+  form.append('worker', JSON.stringify(payload));
+  images.forEach((image, index) => {
+    form.append('images', image, `${payload.employee_code}-face-${index + 1}.jpg`);
+  });
+  return apiRequest('/workers/with-face', {
+    method: 'POST',
+    body: form,
+  });
+}
+
 export function updateWorker(workerId, payload) {
   return apiRequest(`/workers/${workerId}`, {
     method: 'PATCH',
