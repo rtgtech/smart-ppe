@@ -14,6 +14,8 @@ import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from ultralytics import YOLO
 
+from app.db.session import SessionLocal
+from app.models import SafetyScore, Worker
 from app.services.face_recognition import (
     FaceEngine,
     FaceRegistry,
@@ -189,13 +191,62 @@ async def delete_face(person_id: str) -> Response:
     return Response(status_code=204)
 
 
+def lookup_worker_details(person_id: str | None) -> dict[str, Any] | None:
+    if not person_id:
+        return None
+    try:
+        db = SessionLocal()
+        try:
+            worker = (
+                db.query(Worker)
+                .filter(Worker.employee_code.ilike(person_id.strip()))
+                .one_or_none()
+            )
+            if worker:
+                score = (
+                    db.query(SafetyScore)
+                    .filter(SafetyScore.worker_id == worker.worker_id)
+                    .order_by(SafetyScore.calculated_at.desc(), SafetyScore.score_id.desc())
+                    .first()
+                )
+                return {
+                    "worker_id": worker.worker_id,
+                    "id": worker.employee_code,
+                    "workerId": worker.employee_code,
+                    "name": worker.name,
+                    "department": worker.department.name if worker.department else "Underground Mining",
+                    "designation": worker.designation,
+                    "rfidId": worker.rfid_uid or f"RFID-{worker.employee_code}",
+                    "ppeScore": round(float(score.compliance_rate), 1) if score else 100.0,
+                    "risk": score.risk_level if score else "LOW",
+                    "violations": score.violation_count if score else 0,
+                    "status": worker.status,
+                }
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return None
+
+
 def infer_frame(
     encoded_frame: bytes, confidence: float
-) -> tuple[bytes, int, float, list[dict[str, Any]], float, str | None]:
+) -> tuple[
+    bytes,
+    list[dict[str, Any]],
+    float,
+    list[dict[str, Any]],
+    float,
+    str | None,
+    dict[str, Any],
+]:
+    """Run PPE detection and face recognition for one JPEG frame."""
     if yolo_model is None or face_engine is None or face_registry is None:
         raise RuntimeError("The vision models are not loaded.")
 
     image = decode_jpeg(encoded_frame)
+
+    # YOLO PPE detection.
     yolo_started = time.perf_counter()
     results = yolo_model.predict(
         source=image,
@@ -206,9 +257,69 @@ def infer_frame(
     )
     yolo_ms = (time.perf_counter() - yolo_started) * 1000
     result = results[0]
-    detection_count = 0 if result.boxes is None else len(result.boxes)
+
+    detections: list[dict[str, Any]] = []
+    detected_classes: set[str] = set()
+    conf_scores: list[float] = []
+
+    if result.boxes is not None:
+        for box in result.boxes:
+            class_id = int(box.cls[0].item())
+            label = str(result.names[class_id])
+            confidence_score = float(box.conf[0].item())
+            x1, y1, x2, y2 = (
+                round(float(value), 1) for value in box.xyxy[0].tolist()
+            )
+
+            detections.append(
+                {
+                    "class_id": class_id,
+                    "label": label,
+                    "confidence": round(confidence_score, 4),
+                    "bbox": [x1, y1, x2, y2],
+                }
+            )
+            detected_classes.add(label.lower())
+            conf_scores.append(confidence_score)
+
+    detection_count = len(detections)
     annotated = result.plot()
 
+    # Calculate PPE presence from YOLO classes.
+    has_helmet = "helmet" in detected_classes and "no_helmet" not in detected_classes
+    has_boots = "boots" in detected_classes and "no_boots" not in detected_classes
+    has_vest = "vest" in detected_classes
+    has_gloves = "gloves" in detected_classes and "no_gloves" not in detected_classes
+    has_goggles = (
+        "goggles" in detected_classes
+        and "no_goggle" not in detected_classes
+        and "no_goggles" not in detected_classes
+    )
+
+    # Cap lamp is treated as attached to a valid helmet.
+    has_cap_lamp = has_helmet
+
+    ppe_status = {
+        "helmet": has_helmet,
+        "capLamp": has_cap_lamp,
+        "safetyBoots": has_boots,
+        "reflectiveVest": has_vest,
+        "gloves": has_gloves,
+        "goggles": has_goggles,
+    }
+
+    missing_items: list[str] = []
+    if not has_helmet:
+        missing_items.append("Helmet")
+    if not has_cap_lamp:
+        missing_items.append("Cap Lamp")
+    if not has_boots:
+        missing_items.append("Safety Boots")
+    if not has_vest:
+        missing_items.append("Reflective Vest")
+
+    # Face recognition runs on the original image while annotation is layered
+    # on top of the YOLO-rendered frame.
     faces: list[dict[str, Any]] = []
     face_error: str | None = None
     face_started = time.perf_counter()
@@ -219,10 +330,105 @@ def infer_frame(
         face_error = str(exc)
     face_ms = (time.perf_counter() - face_started) * 1000
 
-    encoded_ok, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    # Determine recognized worker information.
+    primary_recognized = next((face for face in faces if face.get("recognized")), None)
+    if primary_recognized:
+        person_id = primary_recognized.get("person_id")
+        db_worker = lookup_worker_details(person_id)
+        if db_worker:
+            worker_data = db_worker
+            worker_data["similarity"] = primary_recognized.get("similarity")
+            worker_data["recognized"] = True
+        else:
+            worker_data = {
+                "id": person_id or "WK10234",
+                "workerId": person_id or "WK10234",
+                "name": primary_recognized.get("name", "Recognized Worker"),
+                "department": "Underground Mining",
+                "designation": "Shift A",
+                "rfidId": f"RFID-{person_id}" if person_id else "RFID-8F31A9",
+                "ppeScore": 95.0,
+                "risk": "LOW",
+                "violations": 0,
+                "status": "ACTIVE",
+                "similarity": primary_recognized.get("similarity"),
+                "recognized": True,
+            }
+    elif faces:
+        worker_data = {
+            "id": "UNKNOWN",
+            "workerId": "UNREGISTERED",
+            "name": "Unknown Worker",
+            "department": "Unassigned",
+            "designation": "—",
+            "rfidId": "—",
+            "ppeScore": 0,
+            "risk": "HIGH",
+            "violations": 1,
+            "status": "UNREGISTERED",
+            "similarity": faces[0].get("similarity"),
+            "recognized": False,
+        }
+    else:
+        worker_data = {
+            "id": "—",
+            "workerId": "—",
+            "name": "No Person Detected",
+            "department": "—",
+            "designation": "—",
+            "rfidId": "—",
+            "ppeScore": 0,
+            "risk": "LOW",
+            "violations": 0,
+            "status": "IDLE",
+            "similarity": None,
+            "recognized": False,
+        }
+
+    # Calculate overall AI confidence.
+    avg_yolo_conf = (sum(conf_scores) / len(conf_scores)) if conf_scores else 0.0
+    face_similarity = primary_recognized.get("similarity") if primary_recognized else None
+    if face_similarity is not None:
+        face_sim = float(face_similarity)
+        if avg_yolo_conf > 0:
+            ai_confidence = round(face_sim * 40.0 + avg_yolo_conf * 60.0, 1)
+        else:
+            ai_confidence = round(face_sim * 100.0, 1)
+    elif avg_yolo_conf > 0:
+        ai_confidence = round(avg_yolo_conf * 100.0, 1)
+    else:
+        ai_confidence = 0.0
+
+    if not faces and detection_count == 0:
+        decision = "IDLE"
+    elif not missing_items and primary_recognized:
+        decision = "ENTRY ALLOWED"
+    else:
+        decision = "ENTRY DENIED"
+
+    live_summary = {
+        "worker": worker_data,
+        "ppe": ppe_status,
+        "missing": missing_items,
+        "aiConfidence": ai_confidence,
+        "decision": decision,
+    }
+
+    encoded_ok, encoded = cv2.imencode(
+        ".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82]
+    )
     if not encoded_ok:
         raise RuntimeError("OpenCV could not encode the annotated frame.")
-    return encoded.tobytes(), detection_count, yolo_ms, faces, face_ms, face_error
+
+    return (
+        encoded.tobytes(),
+        detections,
+        yolo_ms,
+        faces,
+        face_ms,
+        face_error,
+        live_summary,
+    )
 
 
 @router.websocket("/ws/inference")
@@ -250,43 +456,75 @@ async def inference_socket(websocket: WebSocket) -> None:
                 try:
                     config = json.loads(text)
                     if config.get("type") == "config":
-                        confidence = min(0.99, max(0.01, float(config.get("confidence", 0.5))))
+                        confidence = min(
+                            0.99,
+                            max(0.01, float(config.get("confidence", 0.5))),
+                        )
                 except (json.JSONDecodeError, TypeError, ValueError):
-                    await websocket.send_json(
-                        {"type": "error", "message": "Invalid JSON configuration message."}
-                    )
+                    try:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "message": "Invalid JSON configuration message.",
+                            }
+                        )
+                    except Exception:
+                        break
                 continue
 
             frame = message.get("bytes")
             if frame is None:
                 continue
+
             if len(frame) > MAX_FRAME_BYTES:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": f"Frame exceeds the {MAX_FRAME_BYTES}-byte limit.",
-                    }
-                )
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": f"Frame exceeds the {MAX_FRAME_BYTES}-byte limit.",
+                        }
+                    )
+                except Exception:
+                    break
                 continue
 
             try:
                 async with vision_lock:
-                    output, count, yolo_ms, faces, face_ms, face_error = await asyncio.to_thread(
-                        infer_frame, frame, confidence
-                    )
+                    (
+                        output,
+                        detections,
+                        yolo_ms,
+                        faces,
+                        face_ms,
+                        face_error,
+                        live_summary,
+                    ) = await asyncio.to_thread(infer_frame, frame, confidence)
+
                 metadata: dict[str, Any] = {
                     "type": "frame_meta",
-                    "detections": count,
+                    "detection_count": len(detections),
+                    "detections": detections,
                     "inference_ms": round(yolo_ms, 1),
                     "face_inference_ms": round(face_ms, 1),
-                    "recognized_faces": sum(bool(face["recognized"]) for face in faces),
+                    "recognized_faces": sum(
+                        bool(face.get("recognized")) for face in faces
+                    ),
                     "faces": faces,
+                    "worker": live_summary["worker"],
+                    "ppe": live_summary["ppe"],
+                    "missing": live_summary["missing"],
+                    "aiConfidence": live_summary["aiConfidence"],
+                    "decision": live_summary["decision"],
                 }
                 if face_error:
                     metadata["face_error"] = face_error
+
                 await websocket.send_json(metadata)
                 await websocket.send_bytes(output)
             except Exception as exc:
-                await websocket.send_json({"type": "error", "message": str(exc)})
-    except WebSocketDisconnect:
+                try:
+                    await websocket.send_json({"type": "error", "message": str(exc)})
+                except Exception:
+                    break
+    except (WebSocketDisconnect, RuntimeError):
         pass

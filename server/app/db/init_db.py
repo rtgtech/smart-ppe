@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.models import Base, Department, Mine, PpeItem, SafetyScore, Worker
+from app.models import Base, Department, Gate, Mine, PpeItem, SafetyScore, Worker, WorkerPpe
 from app.db.session import engine
 
 
@@ -51,29 +51,43 @@ def seed_initial_data(db: Session) -> None:
         if exists is None:
             db.add(PpeItem(name=ppe_name, description=description, is_mandatory=True))
 
+    gate = db.query(Gate).filter(Gate.mine_id == mine.mine_id, Gate.name == "Gate 01").one_or_none()
+    if gate is None:
+        db.add(Gate(mine_id=mine.mine_id, name="Gate 01", location="Main Shaft Entry", status="ACTIVE"))
+
+    db.flush()
+    ppe_items = {item.name: item for item in db.query(PpeItem).all()}
+
     for code, name, dept_name, shift, rfid_uid, score, risk, violations in DEFAULT_WORKERS:
         exists = db.query(Worker).filter(Worker.employee_code == code).one_or_none()
-        if exists is not None:
-            continue
-        worker = Worker(
-            employee_code=code,
-            name=name,
-            department_id=departments[dept_name].department_id,
-            designation=f"Shift {shift}",
-            rfid_uid=rfid_uid,
-            status="ACTIVE",
-        )
-        db.add(worker)
-        db.flush()
-        db.add(
-            SafetyScore(
-                worker_id=worker.worker_id,
-                score=score,
-                risk_level=risk,
-                violation_count=violations,
-                compliance_rate=score,
+        worker = exists
+        if worker is None:
+            worker = Worker(
+                employee_code=code,
+                name=name,
+                department_id=departments[dept_name].department_id,
+                designation=f"Shift {shift}",
+                rfid_uid=rfid_uid,
+                status="ACTIVE",
             )
-        )
+            db.add(worker)
+            db.flush()
+            db.add(SafetyScore(worker_id=worker.worker_id, score=score, risk_level=risk, violation_count=violations, compliance_rate=score))
+
+        for item_name in ("Helmet", "Reflective Vest", "Safety Boots"):
+            ppe_item = ppe_items[item_name]
+            assignment = db.query(WorkerPpe).filter(
+                WorkerPpe.worker_id == worker.worker_id,
+                WorkerPpe.ppe_id == ppe_item.ppe_id,
+                WorkerPpe.status == "ACTIVE",
+            ).first()
+            if assignment is None:
+                db.add(WorkerPpe(
+                    worker_id=worker.worker_id,
+                    ppe_id=ppe_item.ppe_id,
+                    serial_number=f"{code}-{ppe_item.name.upper().replace(' ', '-')}",
+                    status="ACTIVE",
+                ))
 
     db.commit()
 

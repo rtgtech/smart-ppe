@@ -19,6 +19,9 @@ import Champions from './pages/Champions';
 import Settings from './pages/Settings';
 import SettingsPpe from './pages/SettingsPpe';
 import SettingsUsers from './pages/SettingsUsers';
+import Biometric from './pages/Biometric';
+import ScanPpe from './pages/ScanPpe';
+import ComplianceCheck from './pages/ComplianceCheck';
 
 function Shelled(Page) {
   return (
@@ -34,6 +37,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/biometric" element={<Biometric />} />
+        <Route path="/scan-ppe" element={<ScanPpe />} />
+        <Route path="/compliance-check" element={<ComplianceCheck />} />
 
         <Route path="/dashboard" element={Shelled(Dashboard)} />
         <Route path="/live" element={Shelled(Live)} />

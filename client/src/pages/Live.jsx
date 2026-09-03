@@ -1,80 +1,63 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ScanFace, Nfc, RotateCcw, User, BellRing } from 'lucide-react';
+import { ScanFace, RotateCcw, User, BellRing, Check, X, Square } from 'lucide-react';
 import { PageHeader, Badge, StatusDot } from '../components/ui';
 import AnnotatedVisionFeed from '../components/AnnotatedVisionFeed';
-import { VERIFICATION_RESULT } from '../data/mockData';
 
 const PPE_LABELS = {
   helmet: 'Helmet',
   capLamp: 'Cap Lamp',
   safetyBoots: 'Safety Boots',
   reflectiveVest: 'Reflective Vest',
-  gasDetector: 'Gas Detector',
-  selfRescuer: 'Self-Rescuer',
 };
-
-// step-by-step reveal sequence (key -> delay ms from start)
-const SEQUENCE = [
-  { key: 'idle', label: '' },
-  { key: 'scan', label: 'SCANNING…' },
-  { key: 'face', label: 'FACE DETECTED ✓' },
-  { key: 'identity', label: 'IDENTITY VERIFIED ✓' },
-  { key: 'rfid', label: 'RFID VERIFIED ✓' },
-  { key: 'checkingPpe', label: 'CHECKING PPE…' },
-  { key: 'helmet', label: 'HELMET ✓' },
-  { key: 'capLamp', label: 'CAP LAMP ✓' },
-  { key: 'safetyBoots', label: 'SAFETY BOOTS ✕' },
-  { key: 'reflectiveVest', label: 'REFLECTIVE VEST ✓' },
-  { key: 'gasDetector', label: 'GAS DETECTOR ✓' },
-  { key: 'selfRescuer', label: 'SELF-RESCUER ✓' },
-  { key: 'compliance', label: 'COMPLIANCE CHECK…' },
-  { key: 'decision', label: 'ENTRY DENIED' },
-];
 
 export default function Live() {
   const navigate = useNavigate();
-  const [stepIndex, setStepIndex] = useState(0); // 0 = idle
-  const [running, setRunning] = useState(false);
-  const [revealedPpe, setRevealedPpe] = useState({});
+  const [scanning, setScanning] = useState(false);
   const [visionConnection, setVisionConnection] = useState('offline');
-  const timeouts = useRef([]);
+  const [liveMeta, setLiveMeta] = useState(null);
+  const [currentTime, setCurrentTime] = useState(() => new Date().toLocaleTimeString('en-GB'));
 
-  function clearTimers() {
-    timeouts.current.forEach(clearTimeout);
-    timeouts.current = [];
-  }
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date().toLocaleTimeString('en-GB'));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleFrameMeta = useCallback((meta) => {
+    setLiveMeta(meta);
+  }, []);
 
   function startVerification() {
-    clearTimers();
-    setRevealedPpe({});
-    setRunning(true);
-    setStepIndex(1);
-
-    const stepDelay = 190; // ~2.5s total across 13 steps
-    SEQUENCE.forEach((step, i) => {
-      if (i === 0) return;
-      const t = setTimeout(() => {
-        setStepIndex(i);
-        if (PPE_LABELS[step.key]) {
-          setRevealedPpe((prev) => ({ ...prev, [step.key]: true }));
-        }
-        if (i === SEQUENCE.length - 1) setRunning(false);
-      }, stepDelay * i);
-      timeouts.current.push(t);
-    });
+    setScanning(true);
   }
 
   function reset() {
-    clearTimers();
-    setRunning(false);
-    setStepIndex(0);
-    setRevealedPpe({});
+    setScanning(false);
+    setLiveMeta(null);
   }
 
-  const currentLabel = SEQUENCE[stepIndex]?.label || '';
-  const decided = stepIndex === SEQUENCE.length - 1;
-  const scanning = running || stepIndex > 0;
+  // Derive worker info from live websocket metadata or idle fallback
+  const worker = liveMeta?.worker || {
+    name: scanning ? 'Scanning…' : 'Awaiting Scan',
+    workerId: scanning ? 'LOCATING…' : '—',
+    id: '—',
+    rfidId: '—',
+    ppeScore: null,
+    risk: 'LOW',
+    department: '—',
+    recognized: false,
+  };
+
+  const ppe = liveMeta?.ppe || {};
+  const missing = liveMeta?.missing || [];
+  const aiConfidence = liveMeta?.aiConfidence ?? 0;
+  const decision = liveMeta?.decision || (scanning ? 'ANALYZING…' : 'IDLE');
+  const isDecided = scanning && liveMeta && (decision === 'ENTRY ALLOWED' || decision === 'ENTRY DENIED');
+  const isAllowed = decision === 'ENTRY ALLOWED';
+
+  const workerNavId = worker.id !== '—' && worker.id !== 'UNKNOWN' && worker.id !== 'LOCATING…' ? worker.id : null;
 
   return (
     <div className="animate-fadeUp">
@@ -95,7 +78,11 @@ export default function Live() {
       <div className="grid grid-cols-1 lg:grid-cols-[65%_35%] gap-5">
         {/* LEFT — camera panel */}
         <div className="panel overflow-hidden relative" style={{ minHeight: 420 }}>
-          <AnnotatedVisionFeed active={scanning} onConnectionChange={setVisionConnection} />
+          <AnnotatedVisionFeed
+            active={scanning}
+            onConnectionChange={setVisionConnection}
+            onFrameMeta={handleFrameMeta}
+          />
         </div>
 
         {/* RIGHT — verification result */}
@@ -103,32 +90,53 @@ export default function Live() {
           <div className="label-op mb-4">Verification Result</div>
 
           <div className="flex items-center gap-3 mb-5">
-            <div className="w-11 h-11 rounded-full bg-elevated border border-border flex items-center justify-center">
-              <User size={18} className="text-textSecondary" />
+            <div className={`w-11 h-11 rounded-full border flex items-center justify-center transition-colors ${
+              worker.recognized ? 'bg-safety/10 border-safety/40 text-safety' : 'bg-elevated border-border text-textSecondary'
+            }`}>
+              <User size={18} />
             </div>
-            <div>
-              <div className="font-bold text-sm">{VERIFICATION_RESULT.worker}</div>
-              <div className="mono text-xs text-textMuted">{VERIFICATION_RESULT.workerId}</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm truncate">{worker.name}</span>
+                {worker.recognized && (
+                  <span className="mono text-[0.65rem] px-1.5 py-0.5 rounded bg-safety/10 text-safety border border-safety/30">
+                    VERIFIED
+                  </span>
+                )}
+              </div>
+              <div className="mono text-xs text-textMuted flex items-center gap-2 mt-0.5">
+                <span>{worker.workerId || worker.id || '—'}</span>
+                {worker.department && worker.department !== '—' && (
+                  <>
+                    <span>·</span>
+                    <span className="truncate">{worker.department}</span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
           <div className="space-y-1.5 mb-5">
             {Object.entries(PPE_LABELS).map(([key, label]) => {
-              const shown = revealedPpe[key];
-              const ok = VERIFICATION_RESULT.ppe[key];
+              const hasData = liveMeta && key in ppe;
+              const ok = ppe[key];
               return (
                 <div
                   key={key}
-                  className={`flex items-center justify-between py-2 px-3 rounded border transition-all duration-300 ${
-                    shown ? 'opacity-100 translate-y-0' : 'opacity-30'
-                  } ${shown && !ok ? 'border-danger/40 bg-danger/5' : 'border-border/60'}`}
+                  className={`flex items-center justify-between py-2 px-3 rounded border transition-all duration-200 ${
+                    hasData ? 'opacity-100' : 'opacity-40'
+                  } ${hasData && !ok ? 'border-danger/40 bg-danger/5' : hasData && ok ? 'border-safety/30 bg-safetySubtle/30' : 'border-border/60'}`}
                 >
                   <span className="text-xs text-textSecondary">{label}</span>
-                  {shown ? (
+                  {hasData ? (
                     ok ? (
-                      <span className="text-xs font-bold text-safety">✓ VERIFIED</span>
+                      <span className="text-xs font-bold text-safety flex items-center gap-1">
+                        <Check size={12} /> VERIFIED
+                      </span>
                     ) : (
-                      <span className="text-xs font-bold text-danger">✕ MISSING</span>
+                      <span className="text-xs font-bold text-danger flex items-center gap-1">
+                        <X size={12} /> MISSING
+                      </span>
                     )
                   ) : (
                     <span className="text-xs text-textMuted">—</span>
@@ -140,53 +148,86 @@ export default function Live() {
 
           <div className="flex items-center justify-between panel-elevated px-3 py-2.5 mb-4">
             <span className="label-op">AI Confidence</span>
-            <span className="mono font-bold text-safety">{VERIFICATION_RESULT.aiConfidence}%</span>
+            <span className={`mono font-bold ${aiConfidence > 70 ? 'text-safety' : aiConfidence > 40 ? 'text-warning' : 'text-textMuted'}`}>
+              {liveMeta ? `${aiConfidence}%` : '—'}
+            </span>
           </div>
 
-          {decided && (
+          {isDecided && (
             <div className="mb-4 animate-fadeUp">
-              <div className="text-2xl font-extrabold text-danger tracking-tight">ENTRY DENIED</div>
-              <div className="text-xs text-textSecondary mt-1">
-                MANDATORY PPE MISSING — <span className="text-text font-semibold">Safety Boots</span>
-              </div>
+              {isAllowed ? (
+                <>
+                  <div className="text-2xl font-extrabold text-safety tracking-tight">ENTRY ALLOWED</div>
+                  <div className="text-xs text-textSecondary mt-1">
+                    ALL MANDATORY PPE VERIFIED — <span className="text-text font-semibold">Worker cleared for shift</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-2xl font-extrabold text-danger tracking-tight">ENTRY DENIED</div>
+                  <div className="text-xs text-textSecondary mt-1">
+                    MANDATORY PPE MISSING — <span className="text-text font-semibold">{missing.join(', ') || 'Unregistered Personnel'}</span>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
           <div className="mt-auto space-y-2">
-            {!scanning || decided ? (
+            {!scanning ? (
               <button
                 onClick={startVerification}
                 className="w-full py-2.5 rounded-md bg-safety text-onSafety font-bold text-xs uppercase tracking-wide shadow-glowSm hover:brightness-110 transition focus-ring flex items-center justify-center gap-2"
               >
-                <ScanFace size={14} /> {decided ? 'RETRY SCAN' : 'START VERIFICATION'}
+                <ScanFace size={14} /> START VERIFICATION
               </button>
             ) : (
-              <button disabled className="w-full py-2.5 rounded-md border border-border text-textSecondary text-xs uppercase tracking-wide flex items-center justify-center gap-2">
-                <Nfc size={14} className="animate-pulseGlow" /> {currentLabel || 'PROCESSING…'}
-              </button>
+              <div className="space-y-2">
+                {isDecided && (
+                  <button
+                    onClick={() => setLiveMeta(null)}
+                    className={`w-full py-2.5 rounded-md text-xs uppercase tracking-wide flex items-center justify-center gap-2 font-bold transition focus-ring shadow-glowSm ${
+                      isAllowed ? 'bg-safety text-onSafety hover:brightness-110' : 'bg-elevated border border-border text-text hover:border-safety/40'
+                    }`}
+                  >
+                    <RotateCcw size={14} /> SCAN NEXT WORKER
+                  </button>
+                )}
+                <button
+                  onClick={reset}
+                  className="w-full py-2.5 rounded-md border border-danger/60 bg-danger/10 hover:bg-danger/20 text-danger font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition focus-ring"
+                >
+                  <Square size={13} className="fill-current" /> STOP VERIFICATION
+                </button>
+              </div>
             )}
+
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => navigate(`/workers/${VERIFICATION_RESULT.workerId}`)} className="py-2 rounded-md border border-border text-xs font-semibold text-textSecondary hover:text-text hover:border-safety/50 transition focus-ring">
+              <button
+                onClick={() => workerNavId && navigate(`/workers/${workerNavId}`)}
+                disabled={!workerNavId}
+                className={`py-2 rounded-md border border-border text-xs font-semibold transition focus-ring ${
+                  workerNavId ? 'text-textSecondary hover:text-text hover:border-safety/50' : 'opacity-50 text-textMuted cursor-not-allowed'
+                }`}
+              >
                 VIEW WORKER
               </button>
-              <button onClick={() => navigate('/alerts')} className="py-2 rounded-md border border-danger/40 text-xs font-semibold text-danger hover:bg-danger/10 transition focus-ring flex items-center justify-center gap-1.5">
+              <button
+                onClick={() => navigate('/alerts')}
+                className="py-2 rounded-md border border-danger/40 text-xs font-semibold text-danger hover:bg-danger/10 transition focus-ring flex items-center justify-center gap-1.5"
+              >
                 <BellRing size={12} /> ALERT SUPERVISOR
               </button>
             </div>
-            {scanning && (
-              <button onClick={reset} className="w-full py-1.5 text-[0.68rem] text-textMuted hover:text-textSecondary flex items-center justify-center gap-1.5 focus-ring">
-                <RotateCcw size={11} /> reset demo
-              </button>
-            )}
           </div>
         </div>
       </div>
 
       <div className="mt-4 panel px-4 py-2.5 flex items-center gap-6 mono text-[0.68rem] text-textMuted">
-        <span>10:32:14</span>
+        <span>{currentTime}</span>
         <span>GATE-02</span>
         <span>CAM-002</span>
-        <span>RFID-8F31A9</span>
+        <span>{worker.rfidId && worker.rfidId !== '—' ? worker.rfidId : 'RFID-8F31A9'}</span>
       </div>
     </div>
   );

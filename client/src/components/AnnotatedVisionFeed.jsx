@@ -11,7 +11,7 @@ function getWebSocketUrl() {
   return `${protocol}//${window.location.hostname}:8000/ws/inference`;
 }
 
-export default function AnnotatedVisionFeed({ active, onConnectionChange }) {
+export default function AnnotatedVisionFeed({ active, onConnectionChange, onFrameMeta }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const socketRef = useRef(null);
@@ -21,7 +21,7 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange }) {
   const resultUrlRef = useRef(null);
   const runRef = useRef(0);
   const [resultUrl, setResultUrl] = useState(null);
-  const [connection, setConnection] = useState('offline');
+  const [_connection, setConnection] = useState('offline');
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
 
@@ -118,6 +118,8 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange }) {
               if (message.type === 'error') {
                 waitingRef.current = false;
                 setError(message.message || 'The inference server reported an error.');
+              } else if (message.type === 'frame_meta') {
+                onFrameMeta?.(message);
               }
             } catch {
               waitingRef.current = false;
@@ -160,7 +162,7 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange }) {
       cancelled = true;
       release();
     };
-  }, [active, release, retry, sendFrame, updateConnection]);
+  }, [active, onFrameMeta, release, retry, sendFrame, updateConnection]);
   /* oxlint-enable react/set-state-in-effect */
 
   useEffect(() => () => {
@@ -178,10 +180,23 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange }) {
         <img src={resultUrl} alt="Live annotated PPE and identity detection" className="absolute inset-0 h-full w-full object-contain bg-black" />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center text-textMuted">
-          {connection === 'connecting' ? <LoaderCircle size={34} className="animate-spin text-safety" /> : error ? <WifiOff size={34} className="text-danger" /> : <Camera size={34} />}
+          {error ? (
+            <WifiOff size={36} className="text-danger" />
+          ) : active ? (
+            <div className="relative flex items-center justify-center">
+              <LoaderCircle size={38} className="animate-spin text-safety" />
+              <div className="absolute inset-0 rounded-full animate-ping bg-safety/20 -z-10" />
+            </div>
+          ) : (
+            <Camera size={34} />
+          )}
           <div>
-            <div className="text-sm font-semibold text-text">{connection === 'connecting' ? 'Starting annotated stream' : error ? 'Stream unavailable' : 'Camera is idle'}</div>
-            <div className="mt-1 text-xs">{error || (active ? 'Waiting for the first inference result…' : 'Start verification to begin live detection.')}</div>
+            <div className="text-sm font-semibold text-text">
+              {error ? 'Stream unavailable' : active ? 'Initializing AI Camera…' : 'Camera is idle'}
+            </div>
+            <div className="mt-1 text-xs text-textSecondary">
+              {error || (active ? 'Starting camera feed and loading vision inference…' : 'Start verification to begin live detection.')}
+            </div>
           </div>
           {error && active && (
             <button type="button" onClick={() => setRetry((value) => value + 1)} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-textSecondary hover:border-safety/50 hover:text-text transition focus-ring">

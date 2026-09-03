@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date as date_type, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -23,6 +24,7 @@ from app.models import (
     Report,
     SafetyScore,
     Worker,
+    WorkerPpe,
 )
 from app.schemas.alert import AlertCreate, AlertUpdate
 from app.schemas.attendance_log import AttendanceLogCreate, AttendanceLogUpdate
@@ -41,6 +43,61 @@ router = APIRouter(tags=["operations"])
 
 class StatusPatch(BaseModel):
     status: str
+
+
+class GateItemScan(BaseModel):
+    item_id: str
+    ppe_id: int
+
+
+class GateVisionDetection(BaseModel):
+    label: str
+    confidence: float
+    bbox: list[float] | None = None
+
+
+class GateCheckRequest(BaseModel):
+    employee_code: str
+    gate_id: int
+    face_verified: bool
+    face_confidence: float = 0
+    scanned_items: list[GateItemScan]
+    detections: list[GateVisionDetection]
+
+
+PPE_VISION_LABELS = {
+    "Helmet": "helmet",
+    "Reflective Vest": "vest",
+    "Safety Boots": "boots",
+}
+
+
+def _gate_required_items(db: Session, worker: Worker) -> list[dict]:
+    assignments = {
+        assignment.ppe_id: assignment
+        for assignment in db.query(WorkerPpe).filter(
+            WorkerPpe.worker_id == worker.worker_id,
+            WorkerPpe.status == "ACTIVE",
+        ).all()
+    }
+    items = db.query(PpeItem).filter(
+        PpeItem.is_mandatory.is_(True),
+        PpeItem.name.in_(PPE_VISION_LABELS),
+    ).order_by(PpeItem.ppe_id).all()
+    return [
+        {
+            "ppe_id": item.ppe_id,
+            "name": item.name,
+            "description": item.description,
+            "vision_label": PPE_VISION_LABELS[item.name],
+            "item_id": (
+                assignments[item.ppe_id].serial_number
+                or assignments[item.ppe_id].rfid_tag
+                or f"PPE-{item.ppe_id}"
+            ) if item.ppe_id in assignments else f"PPE-{item.ppe_id}",
+        }
+        for item in items
+    ]
 
 
 def _date_filters(query, model, selected_date: date_type | None, shift: str | None, gate_id: int | None, worker: str | None = None):
@@ -359,6 +416,139 @@ def delete_device(device_id: int, db: Session = Depends(get_db)):
 @router.get("/ppe/items")
 def list_ppe_items(db: Session = Depends(get_db)):
     return db.query(PpeItem).order_by(PpeItem.ppe_id).all()
+
+
+@router.get("/gate-checks/context/{employee_code}")
+def gate_check_context(employee_code: str, db: Session = Depends(get_db)):
+    worker = db.query(Worker).filter(
+        func.upper(Worker.employee_code) == employee_code.strip().upper(),
+        Worker.status == "ACTIVE",
+    ).one_or_none()
+    if worker is None:
+        raise HTTPException(404, "Active worker not found")
+    gate = db.query(Gate).filter(Gate.status == "ACTIVE").order_by(Gate.gate_id).first()
+    if gate is None:
+        raise HTTPException(503, "No active mine checkpoint is configured")
+    return {
+        "worker": {
+            "worker_id": worker.worker_id,
+            "employee_code": worker.employee_code,
+            "name": worker.name,
+            "department": worker.department.name if worker.department else "",
+        },
+        "gate": {"gate_id": gate.gate_id, "name": gate.name, "location": gate.location},
+        "required_items": _gate_required_items(db, worker),
+    }
+
+
+@router.get("/gate-checks/resolve-item/{employee_code}")
+def resolve_gate_item(employee_code: str, item_id: str = Query(..., min_length=1, max_length=128), db: Session = Depends(get_db)):
+    worker = db.query(Worker).filter(func.upper(Worker.employee_code) == employee_code.strip().upper()).one_or_none()
+    if worker is None:
+        raise HTTPException(404, "Worker not found")
+    normalized = item_id.strip().upper()
+    for item in _gate_required_items(db, worker):
+        accepted_ids = {item["item_id"].upper(), f"PPE-{item['ppe_id']}", str(item["ppe_id"])}
+        if normalized in accepted_ids:
+            return item
+    raise HTTPException(404, "This PPE item is not required or assigned to this worker")
+
+
+@router.post("/gate-checks/complete", status_code=status.HTTP_201_CREATED)
+def complete_gate_check(payload: GateCheckRequest, db: Session = Depends(get_db)):
+    worker = db.query(Worker).filter(
+        func.upper(Worker.employee_code) == payload.employee_code.strip().upper(),
+        Worker.status == "ACTIVE",
+    ).one_or_none()
+    if worker is None:
+        raise HTTPException(404, "Active worker not found")
+    gate = db.get(Gate, payload.gate_id)
+    if gate is None or gate.status != "ACTIVE":
+        raise HTTPException(404, "Active mine checkpoint not found")
+
+    required = _gate_required_items(db, worker)
+    if not required:
+        raise HTTPException(409, "No camera-verifiable mandatory PPE is configured")
+    required_by_id = {item["ppe_id"]: item for item in required}
+    required_ids = set(required_by_id)
+    valid_scans = {}
+    for scan in payload.scanned_items:
+        item = required_by_id.get(scan.ppe_id)
+        if item is None:
+            continue
+        accepted_ids = {item["item_id"].upper(), f"PPE-{item['ppe_id']}", str(item["ppe_id"])}
+        if scan.item_id.strip().upper() in accepted_ids:
+            valid_scans[scan.ppe_id] = scan
+    scanned_ids = set(valid_scans)
+    best_detection = {}
+    for detection in payload.detections:
+        key = detection.label.strip().lower()
+        if key not in best_detection or detection.confidence > best_detection[key].confidence:
+            best_detection[key] = detection
+
+    visible_ids = {item["ppe_id"] for item in required if item["vision_label"] in best_detection}
+    passed_checks = int(payload.face_verified) + len(required_ids & scanned_ids & visible_ids)
+    total_checks = 1 + len(required_ids)
+    compliant = payload.face_verified and required_ids <= scanned_ids and required_ids <= visible_ids
+    now = datetime.now(timezone.utc)
+    confidence_values = [max(0, min(100, payload.face_confidence * 100))]
+    confidence_values.extend(
+        max(0, min(100, best_detection[item["vision_label"]].confidence * 100))
+        for item in required if item["vision_label"] in best_detection
+    )
+
+    log = ComplianceLog(
+        worker_id=worker.worker_id,
+        gate_id=gate.gate_id,
+        entry_time=now,
+        overall_status="COMPLIANT" if compliant else "DENIED",
+        compliance_score=round(passed_checks * 100 / total_checks, 1),
+        confidence_score=round(sum(confidence_values) / len(confidence_values), 1),
+        offline_flag=False,
+        sync_status="SYNCED",
+    )
+    db.add(log)
+    db.flush()
+
+    scanned_by_id = valid_scans
+    for item in required:
+        detection = best_detection.get(item["vision_label"])
+        db.add(PpeDetection(
+            log_id=log.log_id,
+            ppe_id=item["ppe_id"],
+            detected=detection is not None,
+            confidence_score=round(detection.confidence * 100, 1) if detection else None,
+            bounding_box=json.dumps(detection.bbox) if detection and detection.bbox else None,
+            detection_source="AI",
+        ))
+        scan = scanned_by_id.get(item["ppe_id"])
+        db.add(PpeDetection(
+            log_id=log.log_id,
+            ppe_id=item["ppe_id"],
+            detected=scan is not None,
+            confidence_score=100 if scan else None,
+            bounding_box=json.dumps({"item_id": scan.item_id}) if scan else None,
+            detection_source="RFID",
+        ))
+
+    attendance = None
+    if compliant:
+        attendance = AttendanceLog(worker_id=worker.worker_id, gate_id=gate.gate_id, entry_time=now, status="INSIDE")
+        db.add(attendance)
+    db.commit()
+    db.refresh(log)
+    if attendance:
+        db.refresh(attendance)
+    return {
+        "allowed": compliant,
+        "verdict": "ENTRY ALLOWED" if compliant else "ENTRY DENIED",
+        "compliance": _compliance_row(log),
+        "attendance": _attendance_row(attendance) if attendance else None,
+        "missing": [
+            item["name"] for item in required
+            if item["ppe_id"] not in scanned_ids or item["ppe_id"] not in visible_ids
+        ] + ([] if payload.face_verified else ["Verified face"]),
+    }
 
 
 @router.get("/ppe/summary")
@@ -724,6 +914,6 @@ def dashboard(date: str | None = None, shift: str | None = None, gate_id: int | 
             "highRiskWorkers": sum(s.risk_level == "HIGH" for s in latest_scores),
         },
         "gates": list_gates(db),
-        "ppeTrend": ppe_trend(db),
+        "ppeTrend": ppe_trend(date=date, shift=shift, gate_id=gate_id, db=db),
         "recentEvents": [_compliance_row(log) for log in db.query(ComplianceLog).order_by(ComplianceLog.entry_time.desc()).limit(5).all()],
     }
