@@ -13,7 +13,6 @@ import ThemeToggle from '../components/ThemeToggle';
 
 const FEATURES = [
   { icon: ScanFace, label: 'AI VISION' },
-  { icon: Nfc, label: 'RFID / NFC' },
   { icon: ShieldCheck, label: 'REAL-TIME VERIFICATION' },
   { icon: WifiOff, label: 'OFFLINE-FIRST' },
   { icon: FileCheck2, label: 'AUDIT READY' },
