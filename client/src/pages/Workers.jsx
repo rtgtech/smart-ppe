@@ -2,6 +2,8 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { PageHeader, Badge, Button } from '../components/ui';
+import FaceEnrollment from '../components/FaceEnrollment';
+import { registerFace } from '../services/faces';
 import {
   createWorker,
   deleteWorker,
@@ -33,9 +35,12 @@ export default function Workers() {
   const [error, setError] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [faceCaptures, setFaceCaptures] = useState([]);
+  const [createdWorkerPendingFace, setCreatedWorkerPendingFace] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   useEffect(() => {
+    // oxlint-disable-next-line react/immutability -- initial data load is declared below for reuse.
     loadWorkers();
   }, []);
 
@@ -69,6 +74,8 @@ export default function Workers() {
 
   function openCreate() {
     setForm({ ...EMPTY_FORM, department_id: departments[0]?.department_id || '' });
+    setFaceCaptures([]);
+    setCreatedWorkerPendingFace(null);
     setModal({ mode: 'create', worker: null });
     setError('');
   }
@@ -85,12 +92,16 @@ export default function Workers() {
       status: worker.status,
     });
     setModal({ mode: 'edit', worker });
+    setFaceCaptures([]);
+    setCreatedWorkerPendingFace(null);
     setError('');
   }
 
   function closeModal() {
     setModal(null);
     setForm(EMPTY_FORM);
+    setFaceCaptures([]);
+    setCreatedWorkerPendingFace(null);
     setSaving(false);
   }
 
@@ -113,20 +124,33 @@ export default function Workers() {
 
   async function submitWorker(e) {
     e.preventDefault();
+    if (modal.mode === 'create' && faceCaptures.length !== 5) {
+      setError('Capture all five face images before creating the worker.');
+      return;
+    }
     setSaving(true);
     setError('');
+    let workerAwaitingFace = createdWorkerPendingFace;
     try {
       const payload = buildPayload();
       if (modal.mode === 'create') {
-        const created = await createWorker(payload);
-        setWorkers((prev) => [created, ...prev]);
+        const created = workerAwaitingFace || await createWorker(payload);
+        if (!createdWorkerPendingFace) {
+          workerAwaitingFace = created;
+          setCreatedWorkerPendingFace(created);
+          setWorkers((prev) => [created, ...prev]);
+        }
+        await registerFace(created.employee_code, created.name, faceCaptures);
       } else {
         const updated = await updateWorker(modal.worker.worker_id, payload);
         setWorkers((prev) => prev.map((w) => (w.worker_id === updated.worker_id ? updated : w)));
       }
       closeModal();
     } catch (err) {
-      setError(err.message || 'Unable to save worker.');
+      const message = err.message || 'Unable to save worker.';
+      setError(workerAwaitingFace
+        ? `Worker ${workerAwaitingFace.employee_code} was saved, but face registration failed: ${message} Keep this form open and try again.`
+        : message);
       setSaving(false);
     }
   }
@@ -248,7 +272,7 @@ export default function Workers() {
 
       {modal && (
         <div className="fixed inset-0 z-50 bg-bg/80 backdrop-blur flex items-center justify-center px-4">
-          <form onSubmit={submitWorker} className="panel-elevated w-full max-w-2xl p-5 animate-fadeUp">
+          <form onSubmit={submitWorker} className="panel-elevated w-full max-w-3xl max-h-[calc(100vh-2rem)] overflow-y-auto p-5 animate-fadeUp">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
                 <div className="label-op text-safety mb-1">{modal.mode === 'create' ? 'NEW RECORD' : 'UPDATE RECORD'}</div>
@@ -261,10 +285,10 @@ export default function Workers() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Employee Code">
-                <input required value={form.employee_code} onChange={(e) => setField('employee_code', e.target.value)} className="field" />
+                <input required maxLength={20} pattern="[A-Za-z0-9_-]+" title="Use only letters, numbers, underscores, or hyphens." value={form.employee_code} onChange={(e) => setField('employee_code', e.target.value)} className="field" />
               </Field>
               <Field label="Worker Name">
-                <input required value={form.name} onChange={(e) => setField('name', e.target.value)} className="field" />
+                <input required maxLength={100} value={form.name} onChange={(e) => setField('name', e.target.value)} className="field" />
               </Field>
               <Field label="Department">
                 <select required value={form.department_id} onChange={(e) => setField('department_id', e.target.value)} className="field">
@@ -273,16 +297,16 @@ export default function Workers() {
                 </select>
               </Field>
               <Field label="Designation">
-                <input value={form.designation} onChange={(e) => setField('designation', e.target.value)} className="field" />
+                <input maxLength={100} value={form.designation} onChange={(e) => setField('designation', e.target.value)} className="field" />
               </Field>
               <Field label="Phone">
-                <input value={form.phone} onChange={(e) => setField('phone', e.target.value)} className="field" />
+                <input maxLength={15} value={form.phone} onChange={(e) => setField('phone', e.target.value)} className="field" />
               </Field>
               <Field label="Email">
-                <input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} className="field" />
+                <input type="email" maxLength={100} value={form.email} onChange={(e) => setField('email', e.target.value)} className="field" />
               </Field>
               <Field label="RFID UID">
-                <input value={form.rfid_uid} onChange={(e) => setField('rfid_uid', e.target.value)} className="field" />
+                <input maxLength={50} value={form.rfid_uid} onChange={(e) => setField('rfid_uid', e.target.value)} className="field" />
               </Field>
               <Field label="Status">
                 <select value={form.status} onChange={(e) => setField('status', e.target.value)} className="field">
@@ -292,9 +316,19 @@ export default function Workers() {
               </Field>
             </div>
 
+            {modal.mode === 'create' && (
+              <FaceEnrollment captures={faceCaptures} onChange={setFaceCaptures} disabled={saving} />
+            )}
+
+            {createdWorkerPendingFace && (
+              <div className="mt-3 rounded-md border border-warningBorder bg-warningSubtle px-3 py-2 text-xs text-warning">
+                The worker record is saved. Submit again to retry only the face registration.
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 mt-6">
               <Button type="button" variant="outline" onClick={closeModal}>CANCEL</Button>
-              <Button type="submit" disabled={saving}>{saving ? 'SAVING...' : modal.mode === 'create' ? 'CREATE WORKER' : 'SAVE CHANGES'}</Button>
+              <Button type="submit" disabled={saving || (modal.mode === 'create' && faceCaptures.length !== 5)}>{saving ? 'SAVING...' : createdWorkerPendingFace ? 'RETRY FACE REGISTRATION' : modal.mode === 'create' ? 'CREATE WORKER + FACE' : 'SAVE CHANGES'}</Button>
             </div>
           </form>
         </div>
