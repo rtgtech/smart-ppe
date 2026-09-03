@@ -1,32 +1,42 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, ArrowUpCircle } from 'lucide-react';
 import { PageHeader, StatCard, Badge } from '../components/ui';
-import { ALERTS } from '../data/mockData';
+import { listAlerts, updateAlert } from '../services/alerts';
 
 const FILTERS = ['ALL', 'CRITICAL', 'WARNING', 'RESOLVED'];
 
 export default function Alerts() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState('ALL');
-  const [statusOverrides, setStatusOverrides] = useState({});
+  const [alerts, setAlerts] = useState([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => { listAlerts().then(setAlerts).catch((err) => setError(err.message)); }, []);
 
   const rows = useMemo(() => {
-    return ALERTS.map((a) => ({ ...a, status: statusOverrides[a.id] || a.status }))
-      .filter((a) => filter === 'ALL' || a.severity === filter);
-  }, [filter, statusOverrides]);
+    return alerts.filter((a) => (
+      filter === 'ALL' || (filter === 'RESOLVED' ? a.status === 'RESOLVED' : a.severity === filter)
+    ));
+  }, [filter, alerts]);
 
-  function setStatus(id, status) {
-    setStatusOverrides((prev) => ({ ...prev, [id]: status }));
+  async function setStatus(alert, status) {
+    try {
+      const updated = await updateAlert(alert.alert_id, { status });
+      setAlerts((prev) => prev.map((item) => item.alert_id === updated.alert_id ? updated : item));
+    } catch (err) {
+      setError(err.message || 'Unable to update alert.');
+    }
   }
 
-  const critical = ALERTS.filter((a) => a.severity === 'CRITICAL').length;
-  const warnings = ALERTS.filter((a) => a.severity === 'WARNING').length;
-  const resolved = ALERTS.filter((a) => a.severity === 'RESOLVED').length;
+  const critical = alerts.filter((a) => a.severity === 'CRITICAL').length;
+  const warnings = alerts.filter((a) => a.severity === 'WARNING').length;
+  const resolved = alerts.filter((a) => a.status === 'RESOLVED').length;
 
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="LIVE" title="Safety Alerts" subtitle="Every violation and device event, routed to the right officer." />
+      {error && <div className="panel border-danger/40 text-danger text-xs px-4 py-3 mb-4">{error}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <StatCard label="Critical" value={critical} tone="danger" />
@@ -68,10 +78,10 @@ export default function Alerts() {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => setStatus(a.id, 'ACKNOWLEDGED')}
+                onClick={() => setStatus(a, 'RESOLVED')}
                 className="px-3 py-1.5 rounded-md border border-border text-[0.68rem] font-semibold text-textSecondary hover:text-safety hover:border-safety/50 flex items-center gap-1.5 focus-ring"
               >
-                <CheckCircle2 size={12} /> ACKNOWLEDGE
+                <CheckCircle2 size={12} /> RESOLVE
               </button>
               {a.workerId && (
                 <button onClick={() => navigate(`/workers/${a.workerId}`)} className="px-3 py-1.5 rounded-md border border-border text-[0.68rem] font-semibold text-textSecondary hover:text-text focus-ring">
@@ -79,10 +89,10 @@ export default function Alerts() {
                 </button>
               )}
               <button
-                onClick={() => setStatus(a.id, 'ESCALATED')}
+                onClick={() => setStatus(a, 'CLOSED')}
                 className="px-3 py-1.5 rounded-md border border-danger/40 text-[0.68rem] font-semibold text-danger hover:bg-danger/10 flex items-center gap-1.5 focus-ring"
               >
-                <ArrowUpCircle size={12} /> ESCALATE
+                <ArrowUpCircle size={12} /> CLOSE
               </button>
             </div>
           </div>

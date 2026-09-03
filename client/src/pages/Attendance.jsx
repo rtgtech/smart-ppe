@@ -1,22 +1,31 @@
+import { useEffect, useState } from 'react';
 import { PageHeader, StatCard, SectionHeader, Badge } from '../components/ui';
-import { KPI, ZONES, ATTENDANCE_ROWS } from '../data/mockData';
+import { listAttendance, getZones, getAttendanceKpi } from '../services/attendance';
 
 export default function Attendance() {
+  const [kpi, setKpi] = useState({});
+  const [zones, setZones] = useState([]);
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    Promise.all([getAttendanceKpi(), getZones(), listAttendance()]).then(([nextKpi, nextZones, nextRows]) => {
+      setKpi(nextKpi); setZones(nextZones); setRows(nextRows);
+    });
+  }, []);
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="REAL-TIME" title="Workforce Presence" subtitle="Underground occupancy and gate throughput." />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-        <StatCard label="Entered Today" value={KPI.todaysEntries.toLocaleString()} />
-        <StatCard label="Exited Today" value="514" />
-        <StatCard label="Currently Underground" value={KPI.workersUnderground} tone="safety" />
-        <StatCard label="Missing Exit Scans" value="17" tone="warning" />
+        <StatCard label="Entered Today" value={kpi.enteredToday ?? '—'} />
+        <StatCard label="Exited Today" value={kpi.exitedToday ?? '—'} />
+        <StatCard label="Currently Underground" value={kpi.currentlyUnderground ?? '—'} tone="safety" />
+        <StatCard label="Missing Exit Scans" value={kpi.missingExitScans ?? '—'} tone="warning" />
       </div>
 
       <div className="panel p-5 mb-6">
         <SectionHeader title="Underground Workforce" subtitle="Live headcount by mine zone" />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {ZONES.map((z) => (
+          {zones.map((z) => (
             <div key={z.zone} className="panel-elevated p-4 text-center rock-texture">
               <div className="label-op mb-2">{z.zone}</div>
               <div className="text-2xl font-bold mono text-safety">{z.count}</div>
@@ -37,7 +46,7 @@ export default function Attendance() {
               </tr>
             </thead>
             <tbody>
-              {ATTENDANCE_ROWS.map((r) => (
+              {rows.map((r) => (
                 <tr key={r.workerId} className="border-b border-border/50 last:border-0 hover:bg-elevated/50">
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="font-semibold">{r.worker}</div>

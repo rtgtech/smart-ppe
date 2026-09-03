@@ -1,10 +1,9 @@
-import { resolveMock } from './api';
-import { GATES, GATE_VIOLATIONS } from '../data/mockData';
+import { apiRequest } from './api';
 
 export function listGates() {
-  return resolveMock(GATES);
+  return apiRequest('/gates');
 }
 
 export function getGateViolations() {
-  return resolveMock(GATE_VIOLATIONS);
+  return apiRequest('/gates/violations');
 }

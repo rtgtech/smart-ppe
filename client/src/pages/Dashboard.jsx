@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, ResponsiveContainer, YAxis, Tooltip } from 'recharts';
 import { Users, LogIn, ShieldCheck, AlertTriangle, XCircle, Flame } from 'lucide-react';
 import { PageHeader, StatCard, SectionHeader, Badge, StatusDot } from '../components/ui';
-import { KPI, GATES, RECENT_EVENTS, PPE_TREND_30D } from '../data/mockData';
+import { getDashboard } from '../services/dashboard';
 
 const SYSTEM_HEALTH = [
   { label: 'AI CAMERA', status: 'ONLINE' },
@@ -14,17 +15,25 @@ const SYSTEM_HEALTH = [
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => { getDashboard().then(setData).catch((err) => setError(err.message)); }, []);
+  const KPI = data?.kpi || {};
+  const GATES = data?.gates || [];
+  const RECENT_EVENTS = data?.recentEvents || [];
+  const PPE_TREND_30D = data?.ppeTrend || [];
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="CENTRAL COAL MINE · SHIFT A" title="Command Center" subtitle="Real-time overview of workforce safety and PPE compliance." />
+      {error && <div className="panel border-danger/40 text-danger text-xs px-4 py-3 mb-4">{error}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-8">
-        <StatCard label="Workers Underground" value={KPI.workersUnderground} icon={Users} />
-        <StatCard label="Today's Entries" value={KPI.todaysEntries.toLocaleString()} icon={LogIn} />
-        <StatCard label="PPE Compliance" value={`${KPI.ppeCompliance}%`} tone="safety" icon={ShieldCheck} />
-        <StatCard label="Violations" value={KPI.violations} tone="warning" icon={AlertTriangle} />
-        <StatCard label="Entry Denied" value={KPI.entryDenied} tone="danger" icon={XCircle} />
-        <StatCard label="High-Risk Workers" value={KPI.highRiskWorkers} tone="danger" icon={Flame} />
+        <StatCard label="Workers Underground" value={KPI.workersUnderground ?? '—'} icon={Users} />
+        <StatCard label="Today's Entries" value={KPI.todaysEntries?.toLocaleString() ?? '—'} icon={LogIn} />
+        <StatCard label="PPE Compliance" value={KPI.ppeCompliance == null ? '—' : `${KPI.ppeCompliance}%`} tone="safety" icon={ShieldCheck} />
+        <StatCard label="Violations" value={KPI.violations ?? '—'} tone="warning" icon={AlertTriangle} />
+        <StatCard label="Entry Denied" value={KPI.entryDenied ?? '—'} tone="danger" icon={XCircle} />
+        <StatCard label="High-Risk Workers" value={KPI.highRiskWorkers ?? '—'} tone="danger" icon={Flame} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 mb-6">

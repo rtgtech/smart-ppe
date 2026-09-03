@@ -1,6 +1,9 @@
-import { resolveMock } from './api';
-import { ALERTS } from '../data/mockData';
+import { apiRequest } from './api';
 
 export function listAlerts() {
-  return resolveMock(ALERTS);
+  return apiRequest('/alerts');
+}
+
+export function updateAlert(alertId, payload) {
+  return apiRequest(`/alerts/${alertId}`, { method: 'PATCH', body: JSON.stringify(payload) });
 }

@@ -1,10 +1,9 @@
-import { resolveMock } from './api';
-import { DEVICES, SYNC_QUEUE } from '../data/mockData';
+import { apiRequest } from './api';
 
 export function listDevices() {
-  return resolveMock(DEVICES);
+  return apiRequest('/devices');
 }
 
 export function getSyncQueue() {
-  return resolveMock(SYNC_QUEUE);
+  return apiRequest('/compliance?sync_status=PENDING');
 }

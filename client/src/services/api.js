@@ -1,5 +1,5 @@
 
-export const USE_MOCK = true;
+export const USE_MOCK = false;
 
 export const BASE_URL = import.meta.env?.VITE_SURAKSHA_API_URL || '/api/v1';
 

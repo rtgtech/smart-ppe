@@ -1,10 +1,9 @@
-import { resolveMock } from './api';
-import { REPORTS, RECENT_REPORTS } from '../data/mockData';
+import { apiRequest } from './api';
 
 export function listReports() {
-  return resolveMock(REPORTS);
+  return apiRequest('/reports');
 }
 
 export function listRecentReports() {
-  return resolveMock(RECENT_REPORTS);
+  return apiRequest('/reports');
 }

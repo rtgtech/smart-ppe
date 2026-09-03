@@ -1,8 +1,6 @@
 // ============================================================
 // SURAKSHA — DATA MODEL
-// JSDoc typedefs documenting the shapes used by the frontend.
-// When the backend (mine_safety.db / SQLite over REST) ships,
-// these become the contract for src/services/*.
+// JSDoc typedefs for API response shapes used by the frontend.
 // ============================================================
 
 /**

@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routes import workers
+from app.api.v1.routes import operations, workers
 from app.core.config import get_settings
 from app.db.init_db import init_db
 from app.services.vision import (
@@ -43,4 +43,5 @@ def health_check() -> dict[str, Any]:
 
 
 app.include_router(workers.router, prefix=settings.api_v1_prefix)
+app.include_router(operations.router, prefix=settings.api_v1_prefix)
 app.include_router(vision_router)

@@ -1,14 +1,17 @@
+import { useEffect, useState } from 'react';
 import { FileText, Download, Eye, RefreshCw } from 'lucide-react';
 import { PageHeader, SectionHeader, Badge } from '../components/ui';
-import { REPORTS, RECENT_REPORTS } from '../data/mockData';
+import { listReports } from '../services/reports';
 
 export default function Reports() {
+  const [reports, setReports] = useState([]);
+  useEffect(() => { listReports().then(setReports).catch(() => setReports([])); }, []);
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="COMPLIANCE" title="Safety Reports" subtitle="Generate, view and export audit-ready reports." />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
-        {REPORTS.map((r) => (
+        {reports.map((r) => (
           <div key={r.id} className="panel p-5 flex flex-col rock-texture">
             <div className="flex items-start justify-between mb-3">
               <FileText size={18} className="text-safety" />
@@ -44,7 +47,7 @@ export default function Reports() {
               </tr>
             </thead>
             <tbody>
-              {RECENT_REPORTS.map((r, i) => (
+              {reports.map((r, i) => (
                 <tr key={i} className="border-b border-border/50 last:border-0 hover:bg-elevated/50">
                   <td className="px-4 py-3 font-medium">{r.name}</td>
                   <td className="px-4 py-3 mono text-textSecondary">{r.date}</td>

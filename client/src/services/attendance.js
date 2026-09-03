@@ -1,19 +1,13 @@
-import { resolveMock } from './api';
-import { ATTENDANCE_ROWS, ZONES, KPI } from '../data/mockData';
+import { apiRequest } from './api';
 
 export function listAttendance() {
-  return resolveMock(ATTENDANCE_ROWS);
+  return apiRequest('/attendance');
 }
 
 export function getZones() {
-  return resolveMock(ZONES);
+  return apiRequest('/attendance/zones');
 }
 
 export function getAttendanceKpi() {
-  return resolveMock({
-    enteredToday: KPI.todaysEntries,
-    exitedToday: 514,
-    currentlyUnderground: KPI.workersUnderground,
-    missingExitScans: 17,
-  });
+  return apiRequest('/attendance/kpi');
 }

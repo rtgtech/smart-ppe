@@ -3,28 +3,25 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { AlertOctagon, ArrowLeft } from 'lucide-react';
 import { Badge, StatCard } from '../components/ui';
-import { PPE_TREND_30D } from '../data/mockData';
 import { getWorker } from '../services/workers';
-
-const HISTORY = [
-  { date: '30 AUG', event: 'Safety Boots Missing', decision: 'ENTRY DENIED', tone: 'danger' },
-  { date: '28 AUG', event: 'Gas Detector Missing', decision: 'WARNING', tone: 'warning' },
-  { date: '21 AUG', event: 'Fully Compliant', decision: 'VERIFIED', tone: 'safety' },
-  { date: '18 AUG', event: 'Helmet Missing', decision: 'ENTRY DENIED', tone: 'danger' },
-];
+import { listCompliance } from '../services/compliance';
 
 export default function WorkerProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [worker, setWorker] = useState(null);
   const [error, setError] = useState('');
+  const [history, setHistory] = useState([]);
 
   useEffect(() => {
     let mounted = true;
     async function loadWorker() {
       try {
         const row = await getWorker(id);
-        if (mounted) setWorker(row);
+        if (mounted) {
+          setWorker(row);
+          listCompliance(row.worker_id).then((logs) => mounted && setHistory(logs)).catch(() => {});
+        }
       } catch (err) {
         if (mounted) setError(err.message || 'Unable to load worker.');
       }
@@ -91,7 +88,7 @@ export default function WorkerProfile() {
           <div className="label-op mb-3">30-Day PPE Compliance</div>
           <div style={{ height: 160 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={PPE_TREND_30D}>
+              <LineChart data={history.map((item) => ({ day: item.time, compliance: item.compliance_score }))}>
                 <YAxis domain={[70, 100]} hide />
                 <Line type="monotone" dataKey="compliance" stroke="rgb(var(--color-safety))" strokeWidth={2} dot={false} />
               </LineChart>
@@ -100,15 +97,16 @@ export default function WorkerProfile() {
 
           <div className="label-op mt-6 mb-3">History</div>
           <div className="space-y-2.5">
-            {HISTORY.map((h, i) => (
+            {history.map((h, i) => (
               <div key={i} className="flex items-center justify-between py-2 border-b border-border/60 last:border-0">
                 <div className="flex items-center gap-3">
-                  <span className="mono text-xs text-textMuted w-14">{h.date}</span>
-                  <span className="text-xs">{h.event}</span>
+                  <span className="mono text-xs text-textMuted w-14">{new Date(h.time).toLocaleDateString(undefined, { day: '2-digit', month: 'short' }).toUpperCase()}</span>
+                  <span className="text-xs">{h.decision}</span>
                 </div>
-                <Badge tone={h.tone}>{h.decision}</Badge>
+                <Badge tone={h.decision === 'DENIED' ? 'danger' : h.decision === 'WARNING' ? 'warning' : 'safety'}>{h.decision}</Badge>
               </div>
             ))}
+            {history.length === 0 && <div className="text-xs text-textMuted">No compliance history recorded.</div>}
           </div>
         </div>
 

@@ -1,18 +1,17 @@
-import { resolveMock } from './api';
-import { PPE_ITEMS, PPE_TREND_30D, MOST_COMMON_VIOLATIONS, MANDATORY_PPE } from '../data/mockData';
+import { apiRequest } from './api';
 
 export function getPpeSummary() {
-  return resolveMock(PPE_ITEMS);
+  return apiRequest('/ppe/summary');
 }
 
 export function getPpeTrend() {
-  return resolveMock(PPE_TREND_30D);
+  return apiRequest('/ppe/trend');
 }
 
 export function getCommonViolations() {
-  return resolveMock(MOST_COMMON_VIOLATIONS);
+  return apiRequest('/ppe/violations');
 }
 
 export function getMandatoryPpeConfig() {
-  return resolveMock(MANDATORY_PPE);
+  return apiRequest('/ppe/config');
 }

@@ -1,14 +1,17 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, Nfc, Router, WifiOff } from 'lucide-react';
 import { PageHeader, StatCard, Badge, StatusDot } from '../components/ui';
-import { DEVICES } from '../data/mockData';
+import { listDevices } from '../services/devices';
 
 const ICONS = { 'AI CAMERA': Camera, 'RFID READER': Nfc, 'GATE CONTROLLER': Router };
 
 export default function Devices() {
   const navigate = useNavigate();
-  const online = DEVICES.filter((d) => d.status === 'ONLINE').length;
-  const offline = DEVICES.filter((d) => d.status === 'OFFLINE').length;
+  const [devices, setDevices] = useState([]);
+  useEffect(() => { listDevices().then(setDevices).catch(() => setDevices([])); }, []);
+  const online = devices.filter((d) => d.status === 'ONLINE').length;
+  const offline = devices.filter((d) => d.status === 'OFFLINE').length;
 
   return (
     <div className="animate-fadeUp">
@@ -31,7 +34,7 @@ export default function Devices() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-        {DEVICES.map((d) => {
+        {devices.map((d) => {
           const Icon = ICONS[d.type];
           return (
             <div key={d.id} className="panel p-4 flex items-center gap-4 rock-texture">

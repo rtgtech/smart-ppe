@@ -1,11 +1,13 @@
+import { useEffect, useState } from 'react';
 import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { BrainCircuit, ArrowRight } from 'lucide-react';
 import { PageHeader, SectionHeader, Badge } from '../components/ui';
-import { SHIFT_COMPARISON, GATE_VIOLATIONS, WORKERS, MOST_COMMON_VIOLATIONS } from '../data/mockData';
-
-const HIGH_RISK = WORKERS.filter((w) => w.risk === 'HIGH');
+import { getInsights } from '../services/insights';
 
 export default function Insights() {
+  const [data, setData] = useState({ shiftComparison: [], gateViolations: [], highRiskWorkers: [], mostCommonViolations: [] });
+  useEffect(() => { getInsights().then(setData).catch(() => {}); }, []);
+  const { shiftComparison, gateViolations, highRiskWorkers, mostCommonViolations } = data;
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="ANALYTICS" title="Safety Insights" subtitle="Turning compliance data into preventive action." />
@@ -15,7 +17,7 @@ export default function Insights() {
           <SectionHeader title="Shift Comparison" subtitle="Compliance rate by shift" />
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={SHIFT_COMPARISON}>
+              <BarChart data={shiftComparison}>
                 <CartesianGrid stroke="rgb(var(--color-grid))" vertical={false} />
                 <XAxis dataKey="shift" tick={{ fill: 'rgb(var(--color-text-secondary))', fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis domain={[80, 100]} tick={{ fill: 'rgb(var(--color-text-muted))', fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -30,7 +32,7 @@ export default function Insights() {
           <SectionHeader title="Gate Violations" subtitle="Denials logged per online gate (30 days)" />
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={GATE_VIOLATIONS}>
+              <BarChart data={gateViolations}>
                 <CartesianGrid stroke="rgb(var(--color-grid))" vertical={false} />
                 <XAxis dataKey="gate" tick={{ fill: 'rgb(var(--color-text-secondary))', fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fill: 'rgb(var(--color-text-muted))', fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -44,9 +46,9 @@ export default function Insights() {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
         <div className="panel p-5">
-          <SectionHeader title="High-Risk Workers" subtitle={`${HIGH_RISK.length} workers flagged for repeated violations`} />
+          <SectionHeader title="High-Risk Workers" subtitle={`${highRiskWorkers.length} workers flagged for repeated violations`} />
           <div className="space-y-2">
-            {HIGH_RISK.map((w) => (
+            {highRiskWorkers.map((w) => (
               <div key={w.id} className="flex items-center justify-between py-2 border-b border-border/60 last:border-0">
                 <div>
                   <div className="text-xs font-semibold">{w.name}</div>
@@ -61,7 +63,7 @@ export default function Insights() {
         <div className="panel p-5">
           <SectionHeader title="Most Missed PPE" />
           <div className="space-y-3">
-            {MOST_COMMON_VIOLATIONS.map((v) => (
+            {mostCommonViolations.map((v) => (
               <div key={v.label} className="flex items-center justify-between">
                 <span className="text-xs text-textSecondary">{v.label}</span>
                 <span className="mono text-xs font-semibold">{v.pct}%</span>

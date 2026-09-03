@@ -28,8 +28,7 @@ without server-side URL rewrite rules.
 src/
   components/   CaveNav (SVG arch navigation), AppShell, CaveBackdrop, MobileNav, ui.jsx (shared primitives)
   data/         mockData.js (all mock records), types.js (JSDoc data-model contracts)
-  services/     one file per domain (workers, ppe, gates, alerts, attendance, reports, devices)
-                — swap USE_MOCK in services/api.js to false once the backend exists
+  services/     API clients and response adapters per domain
   pages/        one file per route (see below)
 ```
 
@@ -63,6 +62,7 @@ src/
   items are positioned mathematically along the same curve as the drawn line.
 - The underground backdrop (`CaveBackdrop.jsx`) is procedural SVG/gradient art,
   not a stock photo, so the visual identity stays original throughout.
-- All data is mocked in `src/data/mockData.js` and routed through
-  `src/services/*` so a real backend can be dropped in later without touching
-  any page component.
+- Operational pages now read from the FastAPI service under `/api/v1`; worker
+  CRUD and PPE face enrollment also write through to the backend. The remaining
+  UI-only areas (authentication/users and some demo presentation content) are
+  kept separate until their database models and routes exist.

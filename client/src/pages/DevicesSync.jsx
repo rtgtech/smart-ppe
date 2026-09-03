@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react';
 import { WifiOff, ArrowDown, User, ScanFace, Database, ListOrdered, Wifi, CheckCircle2 } from 'lucide-react';
 import { PageHeader, Badge } from '../components/ui';
-import { SYNC_QUEUE } from '../data/mockData';
+import { getSyncQueue } from '../services/devices';
 
 const FLOW = [
   { label: 'WORKER', icon: User },
@@ -13,6 +14,8 @@ const FLOW = [
 ];
 
 export default function DevicesSync() {
+  const [queue, setQueue] = useState([]);
+  useEffect(() => { getSyncQueue().then(setQueue).catch(() => setQueue([])); }, []);
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="RESILIENCE" title="Offline Operations" />
@@ -62,7 +65,7 @@ export default function DevicesSync() {
               </tr>
             </thead>
             <tbody>
-              {SYNC_QUEUE.map((e) => (
+              {queue.map((e) => (
                 <tr key={e.id} className="border-b border-border/50 last:border-0 hover:bg-elevated/50">
                   <td className="px-4 py-3 mono">{e.id}</td>
                   <td className="px-4 py-3 font-medium">{e.worker}</td>

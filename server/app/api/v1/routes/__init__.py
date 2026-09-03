@@ -1,3 +1,3 @@
-from app.api.v1.routes import workers
+from app.api.v1.routes import operations, workers
 
-__all__ = ["workers"]
+__all__ = ["operations", "workers"]

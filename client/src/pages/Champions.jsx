@@ -1,9 +1,12 @@
+import { useEffect, useState } from 'react';
 import { Award, ShieldCheck } from 'lucide-react';
 import { PageHeader } from '../components/ui';
-import { CHAMPIONS } from '../data/mockData';
+import { listChampions } from '../services/champions';
 
 export default function Champions() {
-  const [top, ...rest] = CHAMPIONS;
+  const [champions, setChampions] = useState([]);
+  useEffect(() => { listChampions().then(setChampions).catch(() => setChampions([])); }, []);
+  const [top, ...rest] = champions;
 
   return (
     <div className="animate-fadeUp">
@@ -15,10 +18,10 @@ export default function Champions() {
         </div>
         <div className="flex-1 text-center sm:text-left">
           <div className="label-op !text-safety mb-1">Top Performer</div>
-          <div className="text-2xl font-extrabold tracking-tight">{top.worker}</div>
+          <div className="text-2xl font-extrabold tracking-tight">{top?.worker || 'No scores yet'}</div>
           <div className="flex flex-wrap justify-center sm:justify-start gap-x-6 gap-y-1 mt-3">
-            <Metric value={`${top.compliance}%`} label="30-Day Compliance" />
-            <Metric value={`${top.streak} Days`} label="Safe Streak" />
+            <Metric value={top ? `${top.compliance}%` : '—'} label="30-Day Compliance" />
+            <Metric value={top ? `${top.streak} Days` : '—'} label="Safe Streak" />
           </div>
         </div>
         <div className="panel px-5 py-4 text-center border-safety/40 shrink-0">

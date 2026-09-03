@@ -1,17 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { PageHeader } from '../components/ui';
-import { MANDATORY_PPE } from '../data/mockData';
+import { getMandatoryPpeConfig } from '../services/ppe';
+import { apiRequest } from '../services/api';
 
-const STATES = ['REQUIRED', 'OPTIONAL', 'DISABLED'];
+// The current database stores only is_mandatory, so disabled is not a persisted state.
+const STATES = ['REQUIRED', 'OPTIONAL'];
 
 export default function SettingsPpe() {
   const navigate = useNavigate();
-  const [config, setConfig] = useState(MANDATORY_PPE);
+  const [config, setConfig] = useState([]);
+  useEffect(() => { getMandatoryPpeConfig().then(setConfig).catch(() => setConfig([])); }, []);
 
   function setState(key, state) {
-    setConfig((prev) => prev.map((p) => (p.key === key ? { ...p, state } : p)));
+    const item = config.find((p) => p.key === key);
+    if (!item) return;
+    const isMandatory = state === 'REQUIRED';
+    apiRequest(`/ppe/items/${item.ppe_id}`, { method: 'PATCH', body: JSON.stringify({ is_mandatory: isMandatory }) })
+      .then(() => setConfig((prev) => prev.map((p) => (p.key === key ? { ...p, state } : p))))
+      .catch(() => {});
   }
 
   return (
@@ -34,9 +42,7 @@ export default function SettingsPpe() {
                     item.state === s
                       ? s === 'REQUIRED'
                         ? 'border-safety text-safety bg-safetySubtle'
-                        : s === 'OPTIONAL'
-                        ? 'border-warning text-warning bg-warningSubtle'
-                        : 'border-textMuted text-textMuted bg-elevated'
+                      : 'border-warning text-warning bg-warningSubtle'
                       : 'border-border text-textSecondary hover:text-text'
                   }`}
                 >

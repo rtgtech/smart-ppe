@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PageHeader, Badge } from '../components/ui';
-import { AUDIT_LOG, GATES } from '../data/mockData';
+import { listAudit } from '../services/audit';
+import { listGates } from '../services/gates';
 
 export default function Audit() {
   const [decisionFilter, setDecisionFilter] = useState('ALL');
-  const rows = AUDIT_LOG.filter((r) => decisionFilter === 'ALL' || r.decision.toUpperCase() === decisionFilter);
+  const [rowsData, setRowsData] = useState([]);
+  const [gates, setGates] = useState([]);
+  useEffect(() => { Promise.all([listAudit(), listGates()]).then(([audit, nextGates]) => { setRowsData(audit); setGates(nextGates); }); }, []);
+  const rows = rowsData.filter((r) => decisionFilter === 'ALL' || r.decision.toUpperCase() === decisionFilter);
 
   return (
     <div className="animate-fadeUp">
@@ -12,7 +16,7 @@ export default function Audit() {
 
       <div className="panel p-4 mb-5 flex flex-wrap gap-3 items-center">
         <FilterSelect label="Date" options={['Today', 'Yesterday', 'Last 7 days']} />
-        <FilterSelect label="Gate" options={['All Gates', ...GATES.map((g) => g.name)]} />
+        <FilterSelect label="Gate" options={['All Gates', ...gates.map((g) => g.name)]} />
         <FilterSelect label="Source" options={['All Sources', 'AI CAMERA', 'AI + RFID', 'RFID']} />
         <div>
           <div className="label-op mb-1">Decision</div>
