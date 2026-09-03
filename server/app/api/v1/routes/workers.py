@@ -1,11 +1,16 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models import Alert, AttendanceLog, ComplianceLog, Report, SafetyScore, WorkerPpe
 from app.schemas.department import DepartmentRead
 from app.schemas.worker import WorkerCreate, WorkerUpdate
 from app.services import workers as worker_service
+from app.services.face_recognition import FaceServiceError
+from app.services.vision import require_face_services
 
 router = APIRouter(prefix="/workers", tags=["workers"])
 
@@ -127,9 +132,50 @@ def update_worker(worker_id: int, payload: WorkerUpdate, db: Session = Depends(g
 
 
 @router.delete("/{worker_id}", response_model=WorkerDeleteResponse)
-def delete_worker(worker_id: int, db: Session = Depends(get_db)):
+async def delete_worker(worker_id: int, db: Session = Depends(get_db)):
     worker = worker_service.get_worker(db, worker_id)
     if worker is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
-    worker = worker_service.deactivate_worker(db, worker)
-    return WorkerDeleteResponse(worker_id=worker.worker_id, status=worker.status, message="Worker deactivated")
+
+    _, registry = require_face_services()
+    employee_code = worker.employee_code
+    try:
+        face_backup = await asyncio.to_thread(registry.profile_snapshot, employee_code)
+    except FaceServiceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    face_deleted = False
+    try:
+        db.query(Alert).filter(Alert.worker_id == worker_id).delete(synchronize_session=False)
+        db.query(AttendanceLog).filter(AttendanceLog.worker_id == worker_id).delete(synchronize_session=False)
+        db.query(ComplianceLog).filter(ComplianceLog.worker_id == worker_id).delete(synchronize_session=False)
+        db.query(WorkerPpe).filter(WorkerPpe.worker_id == worker_id).delete(synchronize_session=False)
+        db.query(SafetyScore).filter(SafetyScore.worker_id == worker_id).delete(synchronize_session=False)
+        db.query(Report).filter(Report.generated_by == worker_id).update(
+            {Report.generated_by: None}, synchronize_session=False
+        )
+        db.delete(worker)
+        db.flush()
+
+        if face_backup is not None:
+            face_deleted = await asyncio.to_thread(registry.delete, employee_code)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if face_deleted and face_backup is not None:
+            try:
+                await asyncio.to_thread(registry.restore_snapshot, face_backup)
+            except FaceServiceError as restore_error:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Worker deletion failed and the face profile could not be restored.",
+                ) from restore_error
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail="Worker could not be permanently deleted.") from exc
+
+    return WorkerDeleteResponse(
+        worker_id=worker_id,
+        status="DELETED",
+        message="Worker details, history, and face profile permanently deleted",
+    )

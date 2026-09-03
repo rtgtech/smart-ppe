@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import { PageHeader, Badge, Button } from '../components/ui';
 import FaceEnrollment from '../components/FaceEnrollment';
-import { registerFace } from '../services/faces';
+import { deleteFace, registerFace } from '../services/faces';
 import {
   createWorker,
   deleteWorker,
@@ -36,7 +36,6 @@ export default function Workers() {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [faceCaptures, setFaceCaptures] = useState([]);
-  const [createdWorkerPendingFace, setCreatedWorkerPendingFace] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
   useEffect(() => {
@@ -75,7 +74,6 @@ export default function Workers() {
   function openCreate() {
     setForm({ ...EMPTY_FORM, department_id: departments[0]?.department_id || '' });
     setFaceCaptures([]);
-    setCreatedWorkerPendingFace(null);
     setModal({ mode: 'create', worker: null });
     setError('');
   }
@@ -93,7 +91,6 @@ export default function Workers() {
     });
     setModal({ mode: 'edit', worker });
     setFaceCaptures([]);
-    setCreatedWorkerPendingFace(null);
     setError('');
   }
 
@@ -101,7 +98,6 @@ export default function Workers() {
     setModal(null);
     setForm(EMPTY_FORM);
     setFaceCaptures([]);
-    setCreatedWorkerPendingFace(null);
     setSaving(false);
   }
 
@@ -130,17 +126,22 @@ export default function Workers() {
     }
     setSaving(true);
     setError('');
-    let workerAwaitingFace = createdWorkerPendingFace;
     try {
       const payload = buildPayload();
       if (modal.mode === 'create') {
-        const created = workerAwaitingFace || await createWorker(payload);
-        if (!createdWorkerPendingFace) {
-          workerAwaitingFace = created;
-          setCreatedWorkerPendingFace(created);
-          setWorkers((prev) => [created, ...prev]);
+        await registerFace(payload.employee_code, payload.name, faceCaptures);
+        let created;
+        try {
+          created = await createWorker(payload);
+        } catch (workerError) {
+          try {
+            await deleteFace(payload.employee_code);
+          } catch {
+            throw new Error(`${workerError.message || 'Unable to save worker.'} The temporary face profile could not be removed; contact an administrator before retrying.`);
+          }
+          throw workerError;
         }
-        await registerFace(created.employee_code, created.name, faceCaptures);
+        setWorkers((prev) => [created, ...prev]);
       } else {
         const updated = await updateWorker(modal.worker.worker_id, payload);
         setWorkers((prev) => prev.map((w) => (w.worker_id === updated.worker_id ? updated : w)));
@@ -148,9 +149,7 @@ export default function Workers() {
       closeModal();
     } catch (err) {
       const message = err.message || 'Unable to save worker.';
-      setError(workerAwaitingFace
-        ? `Worker ${workerAwaitingFace.employee_code} was saved, but face registration failed: ${message} Keep this form open and try again.`
-        : message);
+      setError(message);
       setSaving(false);
     }
   }
@@ -166,7 +165,7 @@ export default function Workers() {
     setError('');
     try {
       await deleteWorker(worker.worker_id);
-      setWorkers((prev) => prev.map((w) => (w.worker_id === worker.worker_id ? { ...w, status: 'INACTIVE' } : w)));
+      setWorkers((prev) => prev.filter((w) => w.worker_id !== worker.worker_id));
     } catch (err) {
       setError(err.message || 'Unable to delete worker.');
     }
@@ -330,15 +329,9 @@ export default function Workers() {
               <FaceEnrollment captures={faceCaptures} onChange={setFaceCaptures} disabled={saving} />
             )}
 
-            {createdWorkerPendingFace && (
-              <div className="mt-3 rounded-md border border-warningBorder bg-warningSubtle px-3 py-2 text-xs text-warning">
-                The worker record is saved. Submit again to retry only the face registration.
-              </div>
-            )}
-
             <div className="flex justify-end gap-2 mt-6">
               <Button type="button" variant="outline" onClick={closeModal}>CANCEL</Button>
-              <Button type="submit" disabled={saving || (modal.mode === 'create' && faceCaptures.length !== 5)}>{saving ? 'SAVING...' : createdWorkerPendingFace ? 'RETRY FACE REGISTRATION' : modal.mode === 'create' ? 'CREATE WORKER + FACE' : 'SAVE CHANGES'}</Button>
+              <Button type="submit" disabled={saving || (modal.mode === 'create' && faceCaptures.length !== 5)}>{saving ? 'SAVING...' : modal.mode === 'create' ? 'CREATE WORKER + FACE' : 'SAVE CHANGES'}</Button>
             </div>
           </form>
         </div>
@@ -353,9 +346,9 @@ export default function Workers() {
                 <Trash2 size={16} />
               </div>
               <div>
-                <h3 className="text-sm font-extrabold tracking-tight">Deactivate Worker Record</h3>
+                <h3 className="text-sm font-extrabold tracking-tight">Delete Worker Permanently</h3>
                 <p className="text-xs text-textSecondary mt-2 leading-relaxed">
-                  Are you sure you want to deactivate <span className="text-text font-semibold">{deleteConfirm.name}</span> ({deleteConfirm.id})? This will mark their status as inactive.
+                  Delete <span className="text-text font-semibold">{deleteConfirm.name}</span> ({deleteConfirm.id})? Their database details, PPE history, attendance, alerts, and face profile will be permanently removed. This cannot be undone.
                 </p>
               </div>
             </div>
@@ -365,7 +358,7 @@ export default function Workers() {
                 Cancel
               </Button>
               <Button variant="danger" onClick={confirmDelete}>
-                Deactivate
+                Delete permanently
               </Button>
             </div>
           </div>

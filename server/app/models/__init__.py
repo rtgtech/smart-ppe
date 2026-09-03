@@ -11,6 +11,7 @@ from app.models.ppe_detection import PpeDetection
 from app.models.ppe_item import PpeItem
 from app.models.report import Report
 from app.models.safety_score import SafetyScore
+from app.models.seed_state import SeedState
 from app.models.worker import Worker
 from app.models.worker_ppe import WorkerPpe
 
@@ -28,6 +29,7 @@ __all__ = [
     "PpeItem",
     "Report",
     "SafetyScore",
+    "SeedState",
     "Worker",
     "WorkerPpe",
 ]

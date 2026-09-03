@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.models import Base, Department, Gate, Mine, PpeItem, SafetyScore, Worker
+from app.models import Base, Department, Gate, Mine, PpeItem, SafetyScore, SeedState, Worker
 from app.db.session import engine
 from app.db.seed_ppe_data import PPE_CATALOG, seed_ppe_demo_data
 
@@ -14,6 +14,8 @@ DEFAULT_WORKERS = [
     ("WK10198", "Vikram Yadav", "Maintenance", "A", "RFID-441FDD", 81, "HIGH", 9),
     ("WK10187", "Rahul Sharma", "Mining", "B", "RFID-9B0021", 97, "LOW", 1),
 ]
+
+WORKER_SEED_KEY = "initial-demo-workers-v1"
 
 
 def create_tables() -> None:
@@ -51,10 +53,13 @@ def seed_initial_data(db: Session) -> None:
 
     db.flush()
 
-    for code, name, dept_name, shift, rfid_uid, score, risk, violations in DEFAULT_WORKERS:
-        exists = db.query(Worker).filter(Worker.employee_code == code).one_or_none()
-        worker = exists
-        if worker is None:
+    worker_seed = db.get(SeedState, WORKER_SEED_KEY)
+    should_seed_workers = worker_seed is None and db.query(Worker).count() == 0
+    if worker_seed is None:
+        db.add(SeedState(key=WORKER_SEED_KEY))
+
+    if should_seed_workers:
+        for code, name, dept_name, shift, rfid_uid, score, risk, violations in DEFAULT_WORKERS:
             worker = Worker(
                 employee_code=code,
                 name=name,

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -149,11 +150,37 @@ class FaceRegistry:
     def delete(self, person_id: str) -> bool:
         person_id = validate_person_id(person_id)
         with self._lock:
-            if person_id not in self._profiles:
+            removed = self._profiles.pop(person_id, None)
+            if removed is None:
                 return False
-            del self._profiles[person_id]
-            self._save()
+            try:
+                self._save()
+            except FaceServiceError:
+                self._profiles[person_id] = removed
+                raise
             return True
+
+    def profile_snapshot(self, person_id: str) -> dict[str, Any] | None:
+        """Return a private copy used only to roll back coordinated deletion."""
+        person_id = validate_person_id(person_id)
+        with self._lock:
+            profile = self._profiles.get(person_id)
+            return deepcopy(profile) if profile is not None else None
+
+    def restore_snapshot(self, profile: dict[str, Any]) -> None:
+        """Restore a profile after a related database transaction fails."""
+        person_id = validate_person_id(str(profile.get("person_id", "")))
+        with self._lock:
+            previous = self._profiles.get(person_id)
+            self._profiles[person_id] = deepcopy(profile)
+            try:
+                self._save()
+            except FaceServiceError:
+                if previous is None:
+                    self._profiles.pop(person_id, None)
+                else:
+                    self._profiles[person_id] = previous
+                raise
 
     @staticmethod
     def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -304,4 +331,3 @@ def annotate_faces(image: np.ndarray, faces: list[dict[str, Any]]) -> np.ndarray
             cv2.LINE_AA,
         )
     return image
-
