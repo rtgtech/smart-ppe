@@ -557,15 +557,25 @@ def ppe_summary(date: str | None = None, shift: str | None = None, gate_id: int 
     items = db.query(PpeItem).order_by(PpeItem.ppe_id).all()
     rows = []
     for item in items:
-        base = db.query(PpeDetection).join(ComplianceLog, PpeDetection.log_id == ComplianceLog.log_id).filter(PpeDetection.ppe_id == item.ppe_id)
-        base = _date_filters(base, ComplianceLog, selected, shift, gate_id, worker)
-        total = base.with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
-        detected = base.filter(PpeDetection.detected.is_(True)).with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
+        query = db.query(PpeDetection).join(ComplianceLog, PpeDetection.log_id == ComplianceLog.log_id).filter(PpeDetection.ppe_id == item.ppe_id)
+        current = _date_filters(query, ComplianceLog, selected, shift, gate_id, worker)
+        total = current.with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
+        detected = current.filter(PpeDetection.detected.is_(True)).with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
+        compliance = round(detected * 100 / total, 1) if total else None
+
+        trend = None
+        if selected and total:
+            previous = _date_filters(query, ComplianceLog, selected - timedelta(days=1), shift, gate_id, worker)
+            previous_total = previous.with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
+            previous_detected = previous.filter(PpeDetection.detected.is_(True)).with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
+            if previous_total:
+                trend = round(compliance - (previous_detected * 100 / previous_total), 1)
+
         rows.append({
             "key": item.name.lower().replace(" ", ""),
             "label": item.name,
-            "compliance": round(detected * 100 / total, 1) if total else None,
-            "trend": None,
+            "compliance": compliance,
+            "trend": trend,
             "violations": total - detected,
             "is_mandatory": item.is_mandatory,
         })

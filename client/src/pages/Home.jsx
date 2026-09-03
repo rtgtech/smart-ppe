@@ -2,7 +2,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   Mountain,
   ScanFace,
-  Nfc,
   ShieldCheck,
   WifiOff,
   FileCheck2,
@@ -10,6 +9,7 @@ import {
 
 import PrismaticBurst from '../components/PrismaticBurst';
 import ThemeToggle from '../components/ThemeToggle';
+import { useTheme } from '../theme-context';
 
 const FEATURES = [
   { icon: ScanFace, label: 'AI VISION' },
@@ -20,9 +20,11 @@ const FEATURES = [
 
 export default function Home() {
   const navigate = useNavigate();
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
 
   return (
-    <div className="relative min-h-screen overflow-hidden flex flex-col bg-black">
+    <div className="relative min-h-screen overflow-hidden flex flex-col bg-bg transition-colors duration-300">
 
       {/* =========================================================
           PRISMATIC BURST BACKGROUND
@@ -31,7 +33,7 @@ export default function Home() {
 
         <div className="absolute inset-0 opacity-100">
           <PrismaticBurst
-            intensity={1.8}
+            intensity={isLight ? 1.25 : 1.8}
             speed={0.22}
             animationType="rotate3d"
             colors={[
@@ -44,6 +46,7 @@ export default function Home() {
             distort={1.15}
             rayCount={14}
             mixBlendMode="screen"
+            lightMode={isLight}
           />
         </div>
 
@@ -53,22 +56,18 @@ export default function Home() {
           className="
             absolute inset-0
             bg-gradient-to-r
-            from-black/75
-            via-black/35
-            to-transparent
+            from-bg/95
+            via-bg/60
+            to-bg/5
           "
         />
 
         {/* Very subtle cinematic darkening */}
         <div
-          className="
-            absolute inset-0
-            bg-[radial-gradient(
-              ellipse_at_65%_50%,
-              rgba(0,217,255,0.05),
-              transparent_48%
-            )]
-          "
+          className="absolute inset-0"
+          style={{
+            background: 'radial-gradient(ellipse at 65% 50%, rgb(var(--color-safety) / 0.08), transparent 48%)',
+          }}
         />
 
         {/* Bottom fade */}
@@ -76,8 +75,8 @@ export default function Home() {
           className="
             absolute inset-x-0 bottom-0 h-40
             bg-gradient-to-t
-            from-black/70
-            to-transparent
+            from-bg/85
+            to-bg/0
           "
         />
 

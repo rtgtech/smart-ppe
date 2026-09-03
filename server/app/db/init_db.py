@@ -1,17 +1,11 @@
 from sqlalchemy.orm import Session
 
-from app.models import Base, Department, Gate, Mine, PpeItem, SafetyScore, Worker, WorkerPpe
+from app.models import Base, Department, Gate, Mine, PpeItem, SafetyScore, Worker
 from app.db.session import engine
+from app.db.seed_ppe_data import PPE_CATALOG, seed_ppe_demo_data
 
 
-DEFAULT_PPE = [
-    ("Helmet", "Protective head gear"),
-    ("Cap Lamp", "Mine cap lamp"),
-    ("Safety Boots", "Certified underground safety footwear"),
-    ("Reflective Vest", "High-visibility reflective vest"),
-    ("Gas Detector", "Personal gas detector"),
-    ("Self-Rescuer", "Emergency self-rescue device"),
-]
+DEFAULT_PPE = [(name, details["description"]) for name, details in PPE_CATALOG.items()]
 
 DEFAULT_WORKERS = [
     ("WK10234", "Ramesh Kumar", "Underground Mining", "A", "RFID-8F31A9", 92, "HIGH", 7),
@@ -56,7 +50,6 @@ def seed_initial_data(db: Session) -> None:
         db.add(Gate(mine_id=mine.mine_id, name="Gate 01", location="Main Shaft Entry", status="ACTIVE"))
 
     db.flush()
-    ppe_items = {item.name: item for item in db.query(PpeItem).all()}
 
     for code, name, dept_name, shift, rfid_uid, score, risk, violations in DEFAULT_WORKERS:
         exists = db.query(Worker).filter(Worker.employee_code == code).one_or_none()
@@ -74,22 +67,8 @@ def seed_initial_data(db: Session) -> None:
             db.flush()
             db.add(SafetyScore(worker_id=worker.worker_id, score=score, risk_level=risk, violation_count=violations, compliance_rate=score))
 
-        for item_name in ("Helmet", "Reflective Vest", "Safety Boots"):
-            ppe_item = ppe_items[item_name]
-            assignment = db.query(WorkerPpe).filter(
-                WorkerPpe.worker_id == worker.worker_id,
-                WorkerPpe.ppe_id == ppe_item.ppe_id,
-                WorkerPpe.status == "ACTIVE",
-            ).first()
-            if assignment is None:
-                db.add(WorkerPpe(
-                    worker_id=worker.worker_id,
-                    ppe_id=ppe_item.ppe_id,
-                    serial_number=f"{code}-{ppe_item.name.upper().replace(' ', '-')}",
-                    status="ACTIVE",
-                ))
-
     db.commit()
+    seed_ppe_demo_data(db)
 
 
 def init_db() -> None:
