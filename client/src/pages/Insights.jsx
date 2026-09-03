@@ -3,14 +3,21 @@ import { BarChart, Bar, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGri
 import { BrainCircuit, ArrowRight } from 'lucide-react';
 import { PageHeader, SectionHeader, Badge } from '../components/ui';
 import { getInsights } from '../services/insights';
+import { listGates } from '../services/gates';
+import { FilterBar } from '../components/DataFilters';
+import { DEFAULT_FILTERS } from '../data/filters';
 
 export default function Insights() {
   const [data, setData] = useState({ shiftComparison: [], gateViolations: [], highRiskWorkers: [], mostCommonViolations: [] });
-  useEffect(() => { getInsights().then(setData).catch(() => {}); }, []);
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [gates, setGates] = useState([]);
+  useEffect(() => { listGates().then(setGates).catch(() => {}); }, []);
+  useEffect(() => { getInsights(filters).then(setData).catch(() => {}); }, [filters]);
   const { shiftComparison, gateViolations, highRiskWorkers, mostCommonViolations } = data;
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="ANALYTICS" title="Safety Insights" subtitle="Turning compliance data into preventive action." />
+      <FilterBar filters={filters} setFilters={setFilters} gates={gates} />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
         <div className="panel p-5">

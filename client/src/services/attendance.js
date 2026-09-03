@@ -1,13 +1,13 @@
-import { apiRequest } from './api';
+import { apiRequest, filterQuery } from './api';
 
-export function listAttendance() {
-  return apiRequest('/attendance');
+export function listAttendance(filters) {
+  return apiRequest(`/attendance${filterQuery(filters)}`);
 }
 
-export function getZones() {
-  return apiRequest('/attendance/zones');
+export function getZones(filters) {
+  return apiRequest(`/attendance/zones${filterQuery(filters)}`);
 }
 
-export function getAttendanceKpi() {
-  return apiRequest('/attendance/kpi');
+export function getAttendanceKpi(filters) {
+  return apiRequest(`/attendance/kpi${filterQuery(filters)}`);
 }

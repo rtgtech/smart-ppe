@@ -1,134 +1,263 @@
 @import url('https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-* { box-sizing: border-box; }
+
+/* =========================================================
+   GLOBAL
+========================================================= */
+
+* {
+  box-sizing: border-box;
+}
 
 :root {
   color-scheme: dark;
+
   --color-bg: 5 6 6;
   --color-bg-deep: 8 11 11;
+
   --color-surface: 13 18 18;
   --color-elevated: 18 24 24;
   --color-input: 10 14 13;
+
   --color-border: 39 48 46;
+
   --color-text: 243 245 243;
   --color-text-secondary: 137 147 143;
   --color-text-muted: 94 104 100;
+
   --color-safety: 25 232 117;
   --color-safety-dark: 8 122 64;
   --color-safety-subtle: 10 32 21;
   --color-on-safety: 4 20 11;
+
   --color-danger: 255 59 48;
   --color-danger-subtle: 42 14 12;
   --color-danger-border: 74 26 23;
+
   --color-warning: 245 185 66;
   --color-warning-subtle: 42 32 8;
   --color-warning-border: 74 58 20;
+
   --color-info: 77 163 255;
   --color-info-subtle: 10 26 42;
   --color-info-border: 26 58 84;
+
   --color-grid: 26 34 32;
 }
 
+
+/* =========================================================
+   LIGHT THEME
+========================================================= */
+
 :root[data-theme='light'] {
   color-scheme: light;
+
   --color-bg: 244 247 245;
   --color-bg-deep: 235 241 237;
+
   --color-surface: 255 255 255;
   --color-elevated: 247 250 248;
   --color-input: 255 255 255;
+
   --color-border: 199 211 204;
+
   --color-text: 17 29 23;
   --color-text-secondary: 70 88 79;
   --color-text-muted: 102 119 110;
+
   --color-safety: 8 122 64;
   --color-safety-dark: 5 98 50;
   --color-safety-subtle: 224 245 233;
   --color-on-safety: 255 255 255;
+
   --color-danger: 190 42 35;
   --color-danger-subtle: 253 234 232;
   --color-danger-border: 236 173 169;
+
   --color-warning: 151 99 0;
   --color-warning-subtle: 253 244 218;
   --color-warning-border: 226 196 119;
+
   --color-info: 28 100 171;
   --color-info-subtle: 231 242 253;
   --color-info-border: 166 203 238;
+
   --color-grid: 215 224 219;
 }
 
-html, body, #root {
+
+/* =========================================================
+   ROOT / BODY
+========================================================= */
+
+html,
+body,
+#root {
   height: 100%;
 }
 
 body {
+  margin: 0;
+
   background: rgb(var(--color-bg));
   color: rgb(var(--color-text));
-  font-family: 'Onest', 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  font-family:
+    'Onest',
+    'Inter',
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
+
+
+/* =========================================================
+   SELECTION
+========================================================= */
 
 ::selection {
   background: rgb(var(--color-safety) / 0.25);
 }
 
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: rgb(var(--color-bg-deep)); }
-::-webkit-scrollbar-thumb { background: rgb(var(--color-border)); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgb(var(--color-text-muted)); }
+
+/* =========================================================
+   SCROLLBAR
+========================================================= */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgb(var(--color-bg-deep));
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-border));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-text-muted));
+}
+
+
+/* =========================================================
+   OPERATIONAL LABEL
+========================================================= */
 
 .label-op {
   text-transform: uppercase;
+
   font-size: 0.68rem;
   letter-spacing: 0.09em;
+
   color: rgb(var(--color-text-secondary));
+
   font-weight: 600;
 }
+
+
+/* =========================================================
+   MONOSPACE
+========================================================= */
 
 .mono {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
+
+/* =========================================================
+   PANELS
+========================================================= */
+
 .panel {
   background: rgb(var(--color-surface));
+
   border: 1px solid rgb(var(--color-border));
+
   border-radius: 10px;
 }
 
 .panel-elevated {
   background: rgb(var(--color-elevated));
+
   border: 1px solid rgb(var(--color-border));
+
   border-radius: 10px;
 }
 
+
+/* =========================================================
+   SUBTLE TEXTURE
+========================================================= */
+
 .rock-texture {
   background-image:
-    radial-gradient(circle at 15% 20%, rgb(var(--color-text) / 0.02) 0, transparent 40%),
-    radial-gradient(circle at 85% 70%, rgb(var(--color-safety) / 0.04) 0, transparent 45%),
-    repeating-linear-gradient(115deg, rgb(var(--color-text) / 0.01) 0px, rgb(var(--color-text) / 0.01) 1px, transparent 1px, transparent 6px);
+    radial-gradient(circle at 15% 20%,
+      rgb(var(--color-text) / 0.02) 0,
+      transparent 40%),
+    radial-gradient(circle at 85% 70%,
+      rgb(var(--color-safety) / 0.04) 0,
+      transparent 45%),
+    repeating-linear-gradient(115deg,
+      rgb(var(--color-text) / 0.01) 0px,
+      rgb(var(--color-text) / 0.01) 1px,
+      transparent 1px,
+      transparent 6px);
 }
+
+
+/* =========================================================
+   STATUS
+========================================================= */
 
 .status-dot {
   width: 6px;
   height: 6px;
+
   border-radius: 999px;
+
   display: inline-block;
 }
+
+
+/* =========================================================
+   FOCUS
+========================================================= */
 
 .focus-ring:focus-visible {
   outline: 2px solid rgb(var(--color-safety));
   outline-offset: 2px;
 }
 
+
+/* =========================================================
+   INPUT
+========================================================= */
+
 .field {
   width: 100%;
+
   background: rgb(var(--color-input));
+
   border: 1px solid rgb(var(--color-border));
+
   border-radius: 6px;
+
   padding: 9px 12px;
+
   font-size: 0.85rem;
+
   color: rgb(var(--color-text));
 }
 
@@ -137,26 +266,31 @@ body {
   outline-offset: 1px;
 }
 
+
+/* =========================================================
+   CHART TOOLTIP
+========================================================= */
+
 .chart-tooltip {
   background: rgb(var(--color-elevated)) !important;
+
   border: 1px solid rgb(var(--color-border)) !important;
+
   color: rgb(var(--color-text));
+
   font-size: 12px;
 }
 
-.cave-backdrop-base { background: #020706; }
-.cave-overlay-horizontal { background: linear-gradient(90deg, rgba(2,7,6,0.94) 0%, rgba(2,7,6,0.82) 26%, rgba(2,7,6,0.43) 48%, rgba(2,7,6,0.10) 72%, rgba(2,7,6,0.36) 100%); }
-.cave-overlay-vertical { background: linear-gradient(180deg, rgba(1,5,4,0.45) 0%, transparent 32%, rgba(1,5,4,0.66) 100%); }
-.cave-overlay-vignette { background: radial-gradient(ellipse at 62% 48%, transparent 0%, transparent 26%, rgba(1,5,4,0.18) 62%, rgba(1,5,4,0.52) 100%); }
 
-:root[data-theme='light'] .cave-backdrop-base { background: rgb(var(--color-bg)); }
-:root[data-theme='light'] .cave-backdrop-image { opacity: 0.34; filter: saturate(0.7) contrast(0.85); }
-:root[data-theme='light'] .cave-overlay-horizontal { background: linear-gradient(90deg, rgba(244,247,245,0.98) 0%, rgba(244,247,245,0.88) 35%, rgba(244,247,245,0.43) 70%, rgba(244,247,245,0.68) 100%); }
-:root[data-theme='light'] .cave-overlay-vertical { background: linear-gradient(180deg, rgba(244,247,245,0.55) 0%, transparent 38%, rgba(244,247,245,0.92) 100%); }
-:root[data-theme='light'] .cave-overlay-vignette { background: radial-gradient(ellipse at 62% 48%, transparent 0%, transparent 26%, rgba(244,247,245,0.15) 62%, rgba(244,247,245,0.58) 100%); }
+/* =========================================================
+   REDUCED MOTION
+========================================================= */
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;

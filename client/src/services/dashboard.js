@@ -1,5 +1,5 @@
-import { apiRequest } from './api';
+import { apiRequest, filterQuery } from './api';
 
-export function getDashboard() {
-  return apiRequest('/dashboard');
+export function getDashboard(filters) {
+  return apiRequest(`/dashboard${filterQuery(filters)}`);
 }

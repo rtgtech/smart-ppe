@@ -1,19 +1,26 @@
 import { useEffect, useState } from 'react';
 import { PageHeader, StatCard, SectionHeader, Badge } from '../components/ui';
 import { listAttendance, getZones, getAttendanceKpi } from '../services/attendance';
+import { listGates } from '../services/gates';
+import { FilterBar } from '../components/DataFilters';
+import { DEFAULT_FILTERS } from '../data/filters';
 
 export default function Attendance() {
   const [kpi, setKpi] = useState({});
   const [zones, setZones] = useState([]);
   const [rows, setRows] = useState([]);
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [gates, setGates] = useState([]);
+  useEffect(() => { listGates().then(setGates).catch(() => {}); }, []);
   useEffect(() => {
-    Promise.all([getAttendanceKpi(), getZones(), listAttendance()]).then(([nextKpi, nextZones, nextRows]) => {
+    Promise.all([getAttendanceKpi(filters), getZones(filters), listAttendance(filters)]).then(([nextKpi, nextZones, nextRows]) => {
       setKpi(nextKpi); setZones(nextZones); setRows(nextRows);
     });
-  }, []);
+  }, [filters]);
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="REAL-TIME" title="Workforce Presence" subtitle="Underground occupancy and gate throughput." />
+      <FilterBar filters={filters} setFilters={setFilters} gates={gates} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         <StatCard label="Entered Today" value={kpi.enteredToday ?? '—'} />

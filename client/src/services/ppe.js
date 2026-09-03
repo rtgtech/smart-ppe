@@ -1,15 +1,16 @@
 import { apiRequest } from './api';
 
-export function getPpeSummary() {
-  return apiRequest('/ppe/summary');
+import { filterQuery } from './api';
+export function getPpeSummary(filters) {
+  return apiRequest(`/ppe/summary${filterQuery(filters)}`);
 }
 
-export function getPpeTrend() {
-  return apiRequest('/ppe/trend');
+export function getPpeTrend(filters) {
+  return apiRequest(`/ppe/trend${filterQuery(filters)}`);
 }
 
-export function getCommonViolations() {
-  return apiRequest('/ppe/violations');
+export function getCommonViolations(filters) {
+  return apiRequest(`/ppe/violations${filterQuery(filters)}`);
 }
 
 export function getMandatoryPpeConfig() {

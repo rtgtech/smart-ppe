@@ -187,17 +187,27 @@ export default function Workers() {
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row gap-3 mb-5">
-        <div className="relative flex-1 max-w-sm">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search name / Worker ID / RFID"
-            className="w-full bg-input border border-border rounded-md pl-9 pr-3 py-2 text-xs focus-ring"
-          />
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <div className="flex flex-col gap-3 mb-5 lg:flex-row lg:items-end">
+        <label className="block w-full max-w-md flex-1">
+          <span className="filter-label">Search workers</span>
+          <div className="filter-control-shell">
+            <Search size={15} className="filter-control-icon" aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search name / Worker ID / RFID"
+              className="filter-control pr-9"
+              aria-label="Search workers by name, worker ID, or RFID"
+            />
+            {query && (
+              <button type="button" onClick={() => setQuery('')} className="filter-control-action" aria-label="Clear worker search">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        </label>
+        <div className="flex flex-wrap gap-2 lg:pb-px">
           {FILTERS.map((f) => (
             <button
               key={f}

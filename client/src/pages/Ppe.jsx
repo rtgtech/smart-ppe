@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 import { PageHeader, StatCard, SectionHeader } from '../components/ui';
+import { FilterBar } from '../components/DataFilters';
+import { DEFAULT_FILTERS } from '../data/filters';
+import { listGates } from '../services/gates';
 import { getPpeSummary, getPpeTrend, getCommonViolations } from '../services/ppe';
 import { getDashboard } from '../services/dashboard';
 
@@ -10,14 +13,18 @@ export default function Ppe() {
   const [trend, setTrend] = useState([]);
   const [violations, setViolations] = useState([]);
   const [kpi, setKpi] = useState({});
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [gates, setGates] = useState([]);
+  useEffect(() => { listGates().then(setGates).catch(() => {}); }, []);
   useEffect(() => {
-    Promise.all([getPpeSummary(), getPpeTrend(), getCommonViolations(), getDashboard()]).then(([nextItems, nextTrend, nextViolations, dashboard]) => {
+    Promise.all([getPpeSummary(filters), getPpeTrend(filters), getCommonViolations(filters), getDashboard(filters)]).then(([nextItems, nextTrend, nextViolations, dashboard]) => {
       setItems(nextItems); setTrend(nextTrend); setViolations(nextViolations); setKpi(dashboard.kpi || {});
     });
-  }, []);
+  }, [filters]);
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="MINE-WIDE" title="PPE Compliance" subtitle="Mine-wide PPE verification across every gate and shift." />
+      <FilterBar filters={filters} setFilters={setFilters} gates={gates} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         <StatCard label="Overall" value={kpi.ppeCompliance == null ? '—' : `${kpi.ppeCompliance}%`} tone="safety" />

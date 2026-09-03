@@ -2,13 +2,20 @@ import { useEffect, useState } from 'react';
 import { FileText, Download, Eye, RefreshCw } from 'lucide-react';
 import { PageHeader, SectionHeader, Badge } from '../components/ui';
 import { listReports } from '../services/reports';
+import { listGates } from '../services/gates';
+import { FilterBar } from '../components/DataFilters';
+import { DEFAULT_FILTERS } from '../data/filters';
 
 export default function Reports() {
   const [reports, setReports] = useState([]);
-  useEffect(() => { listReports().then(setReports).catch(() => setReports([])); }, []);
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [gates, setGates] = useState([]);
+  useEffect(() => { listGates().then(setGates).catch(() => {}); }, []);
+  useEffect(() => { listReports(filters).then(setReports).catch(() => setReports([])); }, [filters]);
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="COMPLIANCE" title="Safety Reports" subtitle="Generate, view and export audit-ready reports." />
+      <FilterBar filters={filters} setFilters={setFilters} gates={gates} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
         {reports.map((r) => (

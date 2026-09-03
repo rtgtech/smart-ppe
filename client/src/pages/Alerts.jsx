@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, ArrowUpCircle } from 'lucide-react';
 import { PageHeader, StatCard, Badge } from '../components/ui';
 import { listAlerts, updateAlert } from '../services/alerts';
+import { listGates } from '../services/gates';
+import { FilterBar } from '../components/DataFilters';
+import { DEFAULT_FILTERS } from '../data/filters';
 
 const FILTERS = ['ALL', 'CRITICAL', 'WARNING', 'RESOLVED'];
 
@@ -11,8 +14,11 @@ export default function Alerts() {
   const [filter, setFilter] = useState('ALL');
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState('');
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [gates, setGates] = useState([]);
 
-  useEffect(() => { listAlerts().then(setAlerts).catch((err) => setError(err.message)); }, []);
+  useEffect(() => { listGates().then(setGates).catch(() => {}); }, []);
+  useEffect(() => { listAlerts(filters).then(setAlerts).catch((err) => setError(err.message)); }, [filters]);
 
   const rows = useMemo(() => {
     return alerts.filter((a) => (
@@ -37,6 +43,7 @@ export default function Alerts() {
     <div className="animate-fadeUp">
       <PageHeader eyebrow="LIVE" title="Safety Alerts" subtitle="Every violation and device event, routed to the right officer." />
       {error && <div className="panel border-danger/40 text-danger text-xs px-4 py-3 mb-4">{error}</div>}
+      <FilterBar filters={filters} setFilters={setFilters} gates={gates} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <StatCard label="Critical" value={critical} tone="danger" />

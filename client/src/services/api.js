@@ -37,6 +37,16 @@ export async function apiRequest(path, options = {}) {
   return res.json();
 }
 
+export function filterQuery({ period = 'today', date = '', shift = 'ALL', gateId = 'ALL', worker = '' } = {}) {
+  const params = new URLSearchParams();
+  const selectedDate = period === 'date' && date ? date : (() => { const d = new Date(); if (period === 'yesterday') d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
+  params.set('date', selectedDate);
+  if (shift !== 'ALL') params.set('shift', shift);
+  if (gateId !== 'ALL') params.set('gate_id', gateId);
+  if (worker.trim()) params.set('worker', worker.trim());
+  return `?${params.toString()}`;
+}
+
 export function getConnectionState() {
   return typeof navigator !== 'undefined' && navigator.onLine === false ? 'OFFLINE' : 'ONLINE';
 }

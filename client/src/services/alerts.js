@@ -1,7 +1,7 @@
-import { apiRequest } from './api';
+import { apiRequest, filterQuery } from './api';
 
-export function listAlerts() {
-  return apiRequest('/alerts');
+export function listAlerts(filters) {
+  return apiRequest(`/alerts${filterQuery(filters)}`);
 }
 
 export function updateAlert(alertId, payload) {
