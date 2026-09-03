@@ -1,0 +1,133 @@
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
+import { AlertOctagon, ArrowLeft } from 'lucide-react';
+import { Badge, StatCard } from '../components/ui';
+import { PPE_TREND_30D } from '../data/mockData';
+import { getWorker } from '../services/workers';
+
+const HISTORY = [
+  { date: '30 AUG', event: 'Safety Boots Missing', decision: 'ENTRY DENIED', tone: 'danger' },
+  { date: '28 AUG', event: 'Gas Detector Missing', decision: 'WARNING', tone: 'warning' },
+  { date: '21 AUG', event: 'Fully Compliant', decision: 'VERIFIED', tone: 'safety' },
+  { date: '18 AUG', event: 'Helmet Missing', decision: 'ENTRY DENIED', tone: 'danger' },
+];
+
+export default function WorkerProfile() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [worker, setWorker] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadWorker() {
+      try {
+        const row = await getWorker(id);
+        if (mounted) setWorker(row);
+      } catch (err) {
+        if (mounted) setError(err.message || 'Unable to load worker.');
+      }
+    }
+    loadWorker();
+    return () => { mounted = false; };
+  }, [id]);
+
+  if (error) {
+    return (
+      <div className="animate-fadeUp">
+        <button onClick={() => navigate('/workers')} className="flex items-center gap-1.5 text-xs text-textSecondary hover:text-text mb-4 focus-ring">
+          <ArrowLeft size={13} /> Back to Workers
+        </button>
+        <div className="panel border-danger/40 text-danger text-xs px-4 py-3">{error}</div>
+      </div>
+    );
+  }
+
+  if (!worker) {
+    return (
+      <div className="animate-fadeUp">
+        <button onClick={() => navigate('/workers')} className="flex items-center gap-1.5 text-xs text-textSecondary hover:text-text mb-4 focus-ring">
+          <ArrowLeft size={13} /> Back to Workers
+        </button>
+        <div className="panel text-textMuted text-xs px-4 py-8 text-center">Loading worker...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="animate-fadeUp">
+      <button onClick={() => navigate('/workers')} className="flex items-center gap-1.5 text-xs text-textSecondary hover:text-text mb-4 focus-ring">
+        <ArrowLeft size={13} /> Back to Workers
+      </button>
+
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight">{worker.name}</h1>
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <span className="mono text-xs text-textSecondary">{worker.id}</span>
+            <span className="text-textMuted">·</span>
+            <span className="label-op !text-[0.62rem]">{worker.department}</span>
+            <span className="text-textMuted">·</span>
+            <span className="label-op !text-[0.62rem]">SHIFT {worker.shift}</span>
+            <Badge tone={worker.status === 'ACTIVE' ? 'safety' : 'default'}>{worker.status}</Badge>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-4xl font-extrabold mono text-safety">{worker.ppeScore}</div>
+          <div className="label-op">Safety Score</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <StatCard label="30-Day Compliance" value={`${worker.ppeScore}%`} />
+        <StatCard label="Violations" value={worker.violations} tone="warning" />
+        <StatCard label="Entry Denials" value={worker.denials} tone="danger" />
+        <StatCard label="Safety Streak" value={`${worker.streak} days`} tone="safety" />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <div className="xl:col-span-2 panel p-5">
+          <div className="label-op mb-3">30-Day PPE Compliance</div>
+          <div style={{ height: 160 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={PPE_TREND_30D}>
+                <YAxis domain={[70, 100]} hide />
+                <Line type="monotone" dataKey="compliance" stroke="rgb(var(--color-safety))" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="label-op mt-6 mb-3">History</div>
+          <div className="space-y-2.5">
+            {HISTORY.map((h, i) => (
+              <div key={i} className="flex items-center justify-between py-2 border-b border-border/60 last:border-0">
+                <div className="flex items-center gap-3">
+                  <span className="mono text-xs text-textMuted w-14">{h.date}</span>
+                  <span className="text-xs">{h.event}</span>
+                </div>
+                <Badge tone={h.tone}>{h.decision}</Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel p-5 border-warning/30">
+          <div className="flex items-center gap-2 mb-3 text-warning">
+            <AlertOctagon size={16} />
+            <span className="label-op !text-warning">Repeated PPE Violations</span>
+          </div>
+          <p className="text-xs text-textSecondary leading-relaxed mb-4">
+            The system has identified repeated non-compliance for this worker across
+            the last 30 days, concentrated around safety boots and gas detector checks.
+          </p>
+          <div className="label-op mb-1.5">Recommended Action</div>
+          <p className="text-xs text-text mb-5">Supervisor intervention.</p>
+          <button className="w-full py-2.5 rounded-md border border-border text-xs font-bold uppercase tracking-wide hover:border-safety hover:text-safety transition focus-ring">
+            View Audit History
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

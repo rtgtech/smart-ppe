@@ -1,0 +1,46 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# JavaScript / Vite
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime data and biometric templates
+*.db
+*.sqlite
+*.sqlite3
+stream_test/server/data/faces.json
+server/data/faces.json
+
+# Local ML models and generated inference output
+runs/
+Ultralytics/
+.ultralytics/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

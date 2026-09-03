@@ -1,0 +1,24 @@
+from datetime import datetime
+
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.models.base import Base
+
+
+class AttendanceLog(Base):
+    __tablename__ = "attendance_logs"
+    __table_args__ = (
+        CheckConstraint("status IN ('PRESENT', 'INSIDE', 'OUTSIDE', 'ABSENT')", name="ck_attendance_logs_status"),
+    )
+
+    attendance_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    worker_id: Mapped[int] = mapped_column(ForeignKey("workers.worker_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
+    gate_id: Mapped[int] = mapped_column(ForeignKey("gates.gate_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
+    entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    exit_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    worker = relationship("Worker", back_populates="attendance_logs")
+    gate = relationship("Gate", back_populates="attendance_logs")
