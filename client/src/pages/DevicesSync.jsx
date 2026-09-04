@@ -14,8 +14,9 @@ const FLOW = [
 ];
 
 export default function DevicesSync() {
-  const [queue, setQueue] = useState([]);
-  useEffect(() => { getSyncQueue().then(setQueue).catch(() => setQueue([])); }, []);
+  const [sync, setSync] = useState({ events: [], pending: 0, failed: 0, network: 'UNKNOWN', last_sync: null });
+  useEffect(() => { getSyncQueue().then(setSync).catch(() => setSync((current) => ({ ...current, network: 'UNAVAILABLE' }))); }, []);
+  const queue = sync.events || [];
   return (
     <div className="animate-fadeUp">
       <PageHeader eyebrow="RESILIENCE" title="Offline Operations" />
@@ -32,10 +33,10 @@ export default function DevicesSync() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-        <StatusCard label="Network" value="OFFLINE" tone="warning" />
+        <StatusCard label="Central Sync" value={sync.network} tone={sync.network === 'CONFIGURED' ? 'safety' : 'warning'} />
         <StatusCard label="Local Verification" value="ACTIVE" tone="safety" />
-        <StatusCard label="Events Waiting to Sync" value="18" tone="default" />
-        <StatusCard label="Last Sync" value="10:31:52" tone="default" mono />
+        <StatusCard label="Events Waiting to Sync" value={sync.pending} tone={sync.failed ? 'warning' : 'default'} />
+        <StatusCard label="Last Sync" value={sync.last_sync ? new Date(sync.last_sync).toLocaleTimeString() : '—'} tone="default" mono />
       </div>
 
       <div className="panel p-6 mb-8 overflow-x-auto">

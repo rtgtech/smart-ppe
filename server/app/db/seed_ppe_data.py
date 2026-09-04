@@ -134,7 +134,7 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
             if existing is not None:
                 continue
 
-            shift_hour = 6 if "Shift A" in (worker.designation or "") else 14
+            shift_hour = 6 if worker_index % 2 == 0 else 14
             entry_time = datetime.combine(
                 check_date,
                 time(shift_hour, 5 + worker_index * 7),

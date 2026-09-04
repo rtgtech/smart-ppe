@@ -20,7 +20,7 @@ export default function WorkerProfile() {
         const row = await getWorker(id);
         if (mounted) {
           setWorker(row);
-          listCompliance(row.worker_id).then((logs) => mounted && setHistory(logs)).catch(() => {});
+          listCompliance(row.worker_id).then((logs) => mounted && setHistory(logs)).catch(() => { });
         }
       } catch (err) {
         if (mounted) setError(err.message || 'Unable to load worker.');
@@ -65,8 +65,6 @@ export default function WorkerProfile() {
             <span className="mono text-xs text-textSecondary">{worker.id}</span>
             <span className="text-textMuted">·</span>
             <span className="label-op !text-[0.62rem]">{worker.department}</span>
-            <span className="text-textMuted">·</span>
-            <span className="label-op !text-[0.62rem]">SHIFT {worker.shift}</span>
             <Badge tone={worker.status === 'ACTIVE' ? 'safety' : 'default'}>{worker.status}</Badge>
           </div>
         </div>

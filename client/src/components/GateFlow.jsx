@@ -2,9 +2,9 @@ import { Check, Mountain } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const STEPS = [
-  { number: 1, label: 'Identity', path: '/biometric' },
-  { number: 2, label: 'Equipment', path: '/scan-ppe' },
-  { number: 3, label: 'Compliance', path: '/compliance-check' },
+  { number: 1, label: 'Identity', path: '/entry/biometric' },
+  { number: 2, label: 'Equipment', path: '/entry/scan-ppe' },
+  { number: 3, label: 'Compliance', path: '/entry/compliance' },
 ];
 
 export default function GateFlow({ step, children }) {

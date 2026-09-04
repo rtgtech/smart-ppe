@@ -18,7 +18,6 @@ class WorkerPpeCreate(WorkerPpeBase):
 
 
 class WorkerPpeUpdate(BaseModel):
-    worker_id: int | None = Field(default=None, gt=0)
     ppe_id: int | None = Field(default=None, gt=0)
     rfid_tag: str | None = Field(default=None, max_length=50)
     serial_number: str | None = Field(default=None, max_length=50)
@@ -28,5 +27,6 @@ class WorkerPpeUpdate(BaseModel):
 
 
 class WorkerPpeRead(WorkerPpeBase, OrmModel):
-    worker_ppe_id: int
+    worker_ppe_id: str
+    legacy_worker_ppe_id: int | None = None
     issued_at: datetime

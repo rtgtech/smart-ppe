@@ -4,6 +4,7 @@ from app.schemas.common import AttendanceStatus, OrmModel, datetime
 
 
 class AttendanceLogBase(BaseModel):
+    event_id: str | None = None
     worker_id: int = Field(gt=0)
     gate_id: int = Field(gt=0)
     entry_time: datetime

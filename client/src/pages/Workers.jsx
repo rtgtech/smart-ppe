@@ -16,10 +16,7 @@ const EMPTY_FORM = {
   employee_code: '',
   name: '',
   department_id: '',
-  designation: '',
   phone: '',
-  email: '',
-  rfid_uid: '',
   status: 'ACTIVE',
 };
 
@@ -60,13 +57,13 @@ export default function Workers() {
   const rows = useMemo(() => {
     return workers.filter((w) => {
       const q = query.toLowerCase();
-      const matchesQuery = !q || w.name.toLowerCase().includes(q) || w.id.toLowerCase().includes(q) || w.rfidId.toLowerCase().includes(q);
+      const matchesQuery = !q || w.name.toLowerCase().includes(q) || w.id.toLowerCase().includes(q);
       const matchesFilter =
         filter === 'ALL' ||
         (filter === 'HIGH RISK' && w.risk === 'HIGH') ||
         (filter === 'NON-COMPLIANT' && w.ppeScore < 90) ||
-        (filter === 'UNDERGROUND' && ['Underground Mining', 'Mining'].includes(w.department)) ||
-        (filter === 'SURFACE' && !['Underground Mining', 'Mining'].includes(w.department));
+        (filter === 'UNDERGROUND' && w.department === 'Mining') ||
+        (filter === 'SURFACE' && w.department !== 'Mining');
       return matchesQuery && matchesFilter;
     });
   }, [workers, query, filter]);
@@ -84,10 +81,7 @@ export default function Workers() {
       employee_code: worker.employee_code,
       name: worker.name,
       department_id: worker.department_id,
-      designation: worker.designation || '',
       phone: worker.phone || '',
-      email: worker.email || '',
-      rfid_uid: worker.rfid_uid || '',
       status: worker.status,
     });
     setModal({ mode: 'edit', worker });
@@ -113,10 +107,7 @@ export default function Workers() {
       employee_code: form.employee_code.trim(),
       name: form.name.trim(),
       department_id: Number(form.department_id),
-      designation: form.designation.trim() || null,
       phone: form.phone.trim() || null,
-      email: form.email.trim() || null,
-      rfid_uid: form.rfid_uid.trim() || null,
       status: form.status,
     };
   }
@@ -142,7 +133,7 @@ export default function Workers() {
     } catch (err) {
       let message = err.message || 'Unable to save worker.';
       if (err.status === 409) {
-        message = `${message} Use a unique employee code and RFID, or delete the existing face profile before reusing its ID.`;
+        message = `${message} Use a unique employee code, or delete the existing face profile before reusing its ID.`;
       } else if (err.status === 413) {
         message = 'A face image is too large. Retake the five captures and try again.';
       } else if (err.status === 503) {
@@ -194,9 +185,9 @@ export default function Workers() {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search name / Worker ID / RFID"
+              placeholder="Search name or Worker ID"
               className="filter-control pr-9"
-              aria-label="Search workers by name, worker ID, or RFID"
+              aria-label="Search workers by name or worker ID"
             />
             {query && (
               <button type="button" onClick={() => setQuery('')} className="filter-control-action" aria-label="Clear worker search">
@@ -224,14 +215,14 @@ export default function Workers() {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border">
-                {['Worker', 'ID', 'Department', 'Shift', 'PPE Score', 'Risk', 'Status', 'Actions'].map((h) => (
+                {['Worker', 'ID', 'Department', 'PPE Score', 'Risk', 'Status', 'Actions'].map((h) => (
                   <th key={h} className="label-op text-left px-4 py-3 whitespace-nowrap">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-textMuted">Loading workers...</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-textMuted">Loading workers...</td></tr>
               )}
               {rows.map((w) => (
                 <tr
@@ -242,7 +233,6 @@ export default function Workers() {
                   <td className="px-4 py-3 font-semibold whitespace-nowrap">{w.name}</td>
                   <td className="px-4 py-3 mono text-textSecondary whitespace-nowrap">{w.id}</td>
                   <td className="px-4 py-3 text-textSecondary whitespace-nowrap">{w.department}</td>
-                  <td className="px-4 py-3 text-textSecondary">{w.shift}</td>
                   <td className="px-4 py-3 mono font-semibold whitespace-nowrap">{w.ppeScore}%</td>
                   <td className="px-4 py-3">
                     <Badge tone={w.risk === 'HIGH' ? 'danger' : w.risk === 'MEDIUM' ? 'warning' : 'safety'}>{w.risk}</Badge>
@@ -271,7 +261,7 @@ export default function Workers() {
                 </tr>
               ))}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-textMuted">No workers match this search.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-textMuted">No workers match this search.</td></tr>
               )}
             </tbody>
           </table>
@@ -304,23 +294,14 @@ export default function Workers() {
                   {departments.map((d) => <option key={d.department_id} value={d.department_id}>{d.name}</option>)}
                 </select>
               </Field>
-              <Field label="Designation">
-                <input maxLength={100} value={form.designation} onChange={(e) => setField('designation', e.target.value)} className="field" />
-              </Field>
-              <Field label="Phone">
-                <input maxLength={15} value={form.phone} onChange={(e) => setField('phone', e.target.value)} className="field" />
-              </Field>
-              <Field label="Email">
-                <input type="email" maxLength={100} value={form.email} onChange={(e) => setField('email', e.target.value)} className="field" />
-              </Field>
-              <Field label="RFID UID">
-                <input maxLength={50} value={form.rfid_uid} onChange={(e) => setField('rfid_uid', e.target.value)} className="field" />
-              </Field>
               <Field label="Status">
                 <select value={form.status} onChange={(e) => setField('status', e.target.value)} className="field">
                   <option>ACTIVE</option>
                   <option>INACTIVE</option>
                 </select>
+              </Field>
+              <Field label="Phone">
+                <input maxLength={15} value={form.phone} onChange={(e) => setField('phone', e.target.value)} className="field" />
               </Field>
             </div>
 

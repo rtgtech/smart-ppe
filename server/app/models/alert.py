@@ -15,6 +15,8 @@ class Alert(Base):
     )
 
     alert_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_id: Mapped[str | None] = mapped_column(String(36), unique=True, index=True)
+    gate_id: Mapped[int | None] = mapped_column(ForeignKey("gates.gate_id", ondelete="SET NULL"), index=True)
     log_id: Mapped[int | None] = mapped_column(ForeignKey("compliance_logs.log_id", ondelete="SET NULL", onupdate="CASCADE"), index=True)
     worker_id: Mapped[int | None] = mapped_column(ForeignKey("workers.worker_id", ondelete="SET NULL", onupdate="CASCADE"), index=True)
     alert_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -26,4 +28,5 @@ class Alert(Base):
 
     compliance_log = relationship("ComplianceLog", back_populates="alerts")
     worker = relationship("Worker", back_populates="alerts")
+    gate = relationship("Gate")
     notifications = relationship("Notification", back_populates="alert", cascade="all, delete-orphan")

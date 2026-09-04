@@ -3,6 +3,15 @@ import { PageHeader, Badge } from '../components/ui';
 import { listAudit } from '../services/audit';
 import { listGates } from '../services/gates';
 
+function parseDate(isoStr) {
+  if (!isoStr) return '—';
+  let str = String(isoStr).trim();
+  if (!str.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(str)) str += 'Z';
+  const d = new Date(str);
+  if (isNaN(d.getTime())) return String(isoStr);
+  return d.toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
 export default function Audit() {
   const [decisionFilter, setDecisionFilter] = useState('ALL');
   const [rowsData, setRowsData] = useState([]);
@@ -43,7 +52,7 @@ export default function Audit() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.eventId} className="border-b border-border/50 last:border-0 hover:bg-elevated/50">
-                  <td className="px-4 py-3 mono text-textSecondary">{r.time}</td>
+                  <td className="px-4 py-3 mono text-textSecondary">{parseDate(r.time)}</td>
                   <td className="px-4 py-3 mono">{r.eventId}</td>
                   <td className="px-4 py-3 font-medium whitespace-nowrap">{r.worker}</td>
                   <td className="px-4 py-3 mono">{r.gate}</td>

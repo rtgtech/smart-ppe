@@ -10,6 +10,9 @@ class PpeDetectionBase(BaseModel):
     confidence_score: Score | None = None
     bounding_box: str | None = None
     detection_source: DetectionSource
+    evidence_state: str | None = None
+    observed_identifier: str | None = None
+    assignment_result: str | None = None
 
 
 class PpeDetectionCreate(PpeDetectionBase):

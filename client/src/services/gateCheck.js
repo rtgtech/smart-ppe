@@ -20,14 +20,18 @@ export function resetGateSession() {
   sessionStorage.removeItem(SESSION_KEY);
 }
 
-export function getGateContext(employeeCode) {
-  return apiRequest(`/gate-checks/context/${encodeURIComponent(employeeCode)}`);
+export function createEntryAttempt(idempotencyKey) {
+  return apiRequest('/entry/attempts', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey } });
 }
 
-export function resolvePpeItem(employeeCode, itemId) {
-  return apiRequest(`/gate-checks/resolve-item/${encodeURIComponent(employeeCode)}?item_id=${encodeURIComponent(itemId)}`);
+export function getEntryAttempt(eventId) {
+  return apiRequest(`/entry/attempts/${encodeURIComponent(eventId)}`);
 }
 
-export function completeGateCheck(payload) {
-  return apiRequest('/gate-checks/complete', { method: 'POST', body: JSON.stringify(payload) });
+export function finalizeEntryAttempt(eventId) {
+  return apiRequest(`/entry/attempts/${encodeURIComponent(eventId)}/finalize`, { method: 'POST' });
+}
+
+export function resetEntrySession() {
+  sessionStorage.removeItem(SESSION_KEY);
 }

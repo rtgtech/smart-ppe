@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 from pathlib import Path
@@ -11,7 +10,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from ultralytics import YOLO
 
 from app.db.session import SessionLocal
@@ -65,6 +64,11 @@ def _load_services() -> tuple[YOLO, FaceEngine, FaceRegistry]:
             f"YOLO weights not found at '{MODEL_PATH}'. Set YOLO_MODEL_PATH to a local .pt file."
         )
     model = YOLO(str(MODEL_PATH))
+    available = {str(name).lower() for name in model.names.values()}
+    required = {"person", "helmet", "vest", "boots"}
+    missing = sorted(required - available)
+    if missing:
+        raise RuntimeError(f"The YOLO model is missing required gate classes: {', '.join(missing)}")
     engine = FaceEngine(
         detector_path=FACE_DETECTOR_PATH,
         recognizer_path=FACE_RECOGNIZER_PATH,
@@ -225,8 +229,8 @@ def lookup_worker_details(person_id: str | None) -> dict[str, Any] | None:
                     "id": worker.employee_code,
                     "workerId": worker.employee_code,
                     "name": worker.name,
-                    "department": worker.department.name if worker.department else "Underground Mining",
-                    "designation": worker.designation,
+                    "department": worker.department.name if worker.department else "Unassigned",
+                    "designation": None,
                     "rfidId": worker.rfid_uid or f"RFID-{worker.employee_code}",
                     "ppeScore": round(float(score.compliance_rate), 1) if score else 100.0,
                     "risk": score.risk_level if score else "LOW",
@@ -355,7 +359,7 @@ def infer_frame(
                 "id": person_id or "WK10234",
                 "workerId": person_id or "WK10234",
                 "name": primary_recognized.get("name", "Recognized Worker"),
-                "department": "Underground Mining",
+                "department": "Mining",
                 "designation": "Shift A",
                 "rfidId": f"RFID-{person_id}" if person_id else "RFID-8F31A9",
                 "ppeScore": 95.0,
@@ -440,102 +444,3 @@ def infer_frame(
         face_error,
         live_summary,
     )
-
-
-@router.websocket("/ws/inference")
-async def inference_socket(websocket: WebSocket) -> None:
-    await websocket.accept()
-    await websocket.send_json(
-        {
-            "type": "ready",
-            "model": MODEL_PATH.name,
-            "device": DEVICE or "auto",
-            "face_recognition": True,
-            "face_similarity_threshold": FACE_SIMILARITY_THRESHOLD,
-        }
-    )
-    confidence = 0.5
-
-    try:
-        while True:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                break
-
-            text = message.get("text")
-            if text is not None:
-                try:
-                    config = json.loads(text)
-                    if config.get("type") == "config":
-                        confidence = min(
-                            0.99,
-                            max(0.01, float(config.get("confidence", 0.5))),
-                        )
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    try:
-                        await websocket.send_json(
-                            {
-                                "type": "error",
-                                "message": "Invalid JSON configuration message.",
-                            }
-                        )
-                    except Exception:
-                        break
-                continue
-
-            frame = message.get("bytes")
-            if frame is None:
-                continue
-
-            if len(frame) > MAX_FRAME_BYTES:
-                try:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": f"Frame exceeds the {MAX_FRAME_BYTES}-byte limit.",
-                        }
-                    )
-                except Exception:
-                    break
-                continue
-
-            try:
-                async with vision_lock:
-                    (
-                        output,
-                        detections,
-                        yolo_ms,
-                        faces,
-                        face_ms,
-                        face_error,
-                        live_summary,
-                    ) = await asyncio.to_thread(infer_frame, frame, confidence)
-
-                metadata: dict[str, Any] = {
-                    "type": "frame_meta",
-                    "detection_count": len(detections),
-                    "detections": detections,
-                    "inference_ms": round(yolo_ms, 1),
-                    "face_inference_ms": round(face_ms, 1),
-                    "recognized_faces": sum(
-                        bool(face.get("recognized")) for face in faces
-                    ),
-                    "faces": faces,
-                    "worker": live_summary["worker"],
-                    "ppe": live_summary["ppe"],
-                    "missing": live_summary["missing"],
-                    "aiConfidence": live_summary["aiConfidence"],
-                    "decision": live_summary["decision"],
-                }
-                if face_error:
-                    metadata["face_error"] = face_error
-
-                await websocket.send_json(metadata)
-                await websocket.send_bytes(output)
-            except Exception as exc:
-                try:
-                    await websocket.send_json({"type": "error", "message": str(exc)})
-                except Exception:
-                    break
-    except (WebSocketDisconnect, RuntimeError):
-        pass

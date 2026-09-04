@@ -1,0 +1,4 @@
+ppe_id,name,description,mandatory,assigned_units,30_day_checks,detected,violations,compliance_rate_percent
+1,Helmet,"Yellow HDPE mining helmet with six-point suspension and adjustable chin strap.",Yes,4,120,118,2,98.3
+3,Safety Boots,"Ankle-height leather safety boots with steel toe, puncture-resistant midsole, and anti-slip sole.",Yes,4,120,116,4,96.7
+4,Reflective Vest,"Fluorescent lime work vest with 50 mm reflective tape for low-light underground visibility.",Yes,4,120,111,9,92.5

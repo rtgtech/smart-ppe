@@ -1,9 +1,13 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from app.schemas.common import ComplianceStatus, Latitude, Longitude, OrmModel, Score, SyncStatus, datetime
 
 
 class ComplianceLogBase(BaseModel):
+    event_id: str | None = None
+    final_verdict: Literal["ALLOWED", "DENIED", "HOLD"] | None = None
     worker_id: int = Field(gt=0)
     gate_id: int = Field(gt=0)
     entry_time: datetime

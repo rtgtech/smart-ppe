@@ -10,7 +10,7 @@ class PpeDetection(Base):
     __tablename__ = "ppe_detections"
     __table_args__ = (
         CheckConstraint("confidence_score IS NULL OR (confidence_score >= 0 AND confidence_score <= 100)", name="ck_ppe_detections_confidence_score"),
-        CheckConstraint("detection_source IN ('AI', 'RFID', 'SENSOR')", name="ck_ppe_detections_detection_source"),
+        CheckConstraint("detection_source IN ('AI', 'QR', 'RFID', 'SENSOR')", name="ck_ppe_detections_detection_source"),
         UniqueConstraint("log_id", "ppe_id", "detection_source", name="uq_ppe_detections_log_item_source"),
     )
 
@@ -21,6 +21,9 @@ class PpeDetection(Base):
     confidence_score: Mapped[float | None] = mapped_column(Float)
     bounding_box: Mapped[str | None] = mapped_column(Text)
     detection_source: Mapped[str] = mapped_column(String(30), nullable=False)
+    evidence_state: Mapped[str | None] = mapped_column(String(20))
+    observed_identifier: Mapped[str | None] = mapped_column(String(128))
+    assignment_result: Mapped[str | None] = mapped_column(String(30))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     compliance_log = relationship("ComplianceLog", back_populates="detections")

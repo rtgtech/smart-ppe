@@ -1,5 +1,6 @@
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Navigate, Routes, Route } from 'react-router-dom';
 import AppShell from './components/AppShell';
+import EntryLayout from './components/EntryLayout';
 
 import Home from './pages/Home';
 import Login from './pages/Login';
@@ -37,9 +38,12 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/biometric" element={<Biometric />} />
-        <Route path="/scan-ppe" element={<ScanPpe />} />
-        <Route path="/compliance-check" element={<ComplianceCheck />} />
+        <Route path="/entry" element={<EntryLayout />}>
+          <Route index element={<Navigate to="biometric" replace />} />
+          <Route path="biometric" element={<Biometric />} />
+          <Route path="scan-ppe" element={<ScanPpe />} />
+          <Route path="compliance" element={<ComplianceCheck />} />
+        </Route>
 
         <Route path="/dashboard" element={Shelled(Dashboard)} />
         <Route path="/live" element={Shelled(Live)} />

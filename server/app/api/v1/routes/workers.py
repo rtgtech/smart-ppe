@@ -25,12 +25,7 @@ class WorkerRow(BaseModel):
     name: str
     department_id: int
     department: str
-    designation: str | None
-    shift: str
     phone: str | None
-    email: str | None
-    rfid_uid: str | None
-    rfidId: str
     ppeScore: float
     risk: str
     status: str
@@ -50,8 +45,6 @@ def to_worker_row(db: Session, worker) -> WorkerRow:
     ppe_score = score.compliance_rate if score else 100
     risk = score.risk_level if score else "LOW"
     violations = score.violation_count if score else 0
-    designation = worker.designation or ""
-    shift = designation.replace("Shift", "").strip() or "A"
 
     return WorkerRow(
         worker_id=worker.worker_id,
@@ -60,12 +53,7 @@ def to_worker_row(db: Session, worker) -> WorkerRow:
         name=worker.name,
         department_id=worker.department_id,
         department=worker.department.name if worker.department else "",
-        designation=worker.designation,
-        shift=shift,
         phone=worker.phone,
-        email=worker.email,
-        rfid_uid=worker.rfid_uid,
-        rfidId=worker.rfid_uid or "",
         ppeScore=ppe_score,
         risk=risk,
         status=worker.status,
@@ -81,12 +69,6 @@ def ensure_unique_worker_fields(db: Session, payload: WorkerCreate | WorkerUpdat
         existing = worker_service.get_worker_by_code(db, employee_code)
         if existing and existing.worker_id != current_worker_id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Employee code already exists")
-
-    rfid_uid = data.get("rfid_uid")
-    if rfid_uid:
-        existing = worker_service.get_worker_by_rfid(db, rfid_uid)
-        if existing and existing.worker_id != current_worker_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="RFID UID already exists")
 
 
 @router.get("/departments", response_model=list[DepartmentRead])

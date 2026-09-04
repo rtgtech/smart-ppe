@@ -5,5 +5,5 @@ export function listDevices() {
 }
 
 export function getSyncQueue() {
-  return apiRequest('/compliance?sync_status=PENDING');
+  return apiRequest('/entry/sync/status');
 }

@@ -30,7 +30,7 @@ export default function Live() {
   }, []);
 
   function startVerification() {
-    setScanning(true);
+    navigate('/entry/biometric');
   }
 
   function reset() {
@@ -43,7 +43,6 @@ export default function Live() {
     name: scanning ? 'Scanning…' : 'Awaiting Scan',
     workerId: scanning ? 'LOCATING…' : '—',
     id: '—',
-    rfidId: '—',
     ppeScore: null,
     risk: 'LOW',
     department: '—',
@@ -70,7 +69,6 @@ export default function Live() {
               <StatusDot status={visionConnection === 'online' ? 'ONLINE' : 'OFFLINE'} />
               CAMERA {visionConnection === 'online' ? 'ONLINE' : visionConnection === 'connecting' ? 'CONNECTING' : 'OFFLINE'}
             </Badge>
-            <Badge tone="safety"><StatusDot status="ONLINE" /> RFID ONLINE</Badge>
           </div>
         }
       />
@@ -90,9 +88,8 @@ export default function Live() {
           <div className="label-op mb-4">Verification Result</div>
 
           <div className="flex items-center gap-3 mb-5">
-            <div className={`w-11 h-11 rounded-full border flex items-center justify-center transition-colors ${
-              worker.recognized ? 'bg-safety/10 border-safety/40 text-safety' : 'bg-elevated border-border text-textSecondary'
-            }`}>
+            <div className={`w-11 h-11 rounded-full border flex items-center justify-center transition-colors ${worker.recognized ? 'bg-safety/10 border-safety/40 text-safety' : 'bg-elevated border-border text-textSecondary'
+              }`}>
               <User size={18} />
             </div>
             <div className="min-w-0 flex-1">
@@ -123,9 +120,8 @@ export default function Live() {
               return (
                 <div
                   key={key}
-                  className={`flex items-center justify-between py-2 px-3 rounded border transition-all duration-200 ${
-                    hasData ? 'opacity-100' : 'opacity-40'
-                  } ${hasData && !ok ? 'border-danger/40 bg-danger/5' : hasData && ok ? 'border-safety/30 bg-safetySubtle/30' : 'border-border/60'}`}
+                  className={`flex items-center justify-between py-2 px-3 rounded border transition-all duration-200 ${hasData ? 'opacity-100' : 'opacity-40'
+                    } ${hasData && !ok ? 'border-danger/40 bg-danger/5' : hasData && ok ? 'border-safety/30 bg-safetySubtle/30' : 'border-border/60'}`}
                 >
                   <span className="text-xs text-textSecondary">{label}</span>
                   {hasData ? (
@@ -179,16 +175,15 @@ export default function Live() {
                 onClick={startVerification}
                 className="w-full py-2.5 rounded-md bg-safety text-onSafety font-bold text-xs uppercase tracking-wide shadow-glowSm hover:brightness-110 transition focus-ring flex items-center justify-center gap-2"
               >
-                <ScanFace size={14} /> START VERIFICATION
+                <ScanFace size={14} /> OPEN GATE ENTRY
               </button>
             ) : (
               <div className="space-y-2">
                 {isDecided && (
                   <button
                     onClick={() => setLiveMeta(null)}
-                    className={`w-full py-2.5 rounded-md text-xs uppercase tracking-wide flex items-center justify-center gap-2 font-bold transition focus-ring shadow-glowSm ${
-                      isAllowed ? 'bg-safety text-onSafety hover:brightness-110' : 'bg-elevated border border-border text-text hover:border-safety/40'
-                    }`}
+                    className={`w-full py-2.5 rounded-md text-xs uppercase tracking-wide flex items-center justify-center gap-2 font-bold transition focus-ring shadow-glowSm ${isAllowed ? 'bg-safety text-onSafety hover:brightness-110' : 'bg-elevated border border-border text-text hover:border-safety/40'
+                      }`}
                   >
                     <RotateCcw size={14} /> SCAN NEXT WORKER
                   </button>
@@ -206,9 +201,8 @@ export default function Live() {
               <button
                 onClick={() => workerNavId && navigate(`/workers/${workerNavId}`)}
                 disabled={!workerNavId}
-                className={`py-2 rounded-md border border-border text-xs font-semibold transition focus-ring ${
-                  workerNavId ? 'text-textSecondary hover:text-text hover:border-safety/50' : 'opacity-50 text-textMuted cursor-not-allowed'
-                }`}
+                className={`py-2 rounded-md border border-border text-xs font-semibold transition focus-ring ${workerNavId ? 'text-textSecondary hover:text-text hover:border-safety/50' : 'opacity-50 text-textMuted cursor-not-allowed'
+                  }`}
               >
                 VIEW WORKER
               </button>
@@ -227,7 +221,7 @@ export default function Live() {
         <span>{currentTime}</span>
         <span>GATE-02</span>
         <span>CAM-002</span>
-        <span>{worker.rfidId && worker.rfidId !== '—' ? worker.rfidId : 'RFID-8F31A9'}</span>
+        <span>AI VISION</span>
       </div>
     </div>
   );

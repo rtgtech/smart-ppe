@@ -48,11 +48,19 @@ export async function apiRequest(path, options = {}) {
 
 export function filterQuery({ period = 'today', date = '', shift = 'ALL', gateId = 'ALL', worker = '' } = {}) {
   const params = new URLSearchParams();
-  const selectedDate = period === 'date' && date ? date : (() => { const d = new Date(); if (period === 'yesterday') d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
+  let selectedDate = date;
+  if (!selectedDate) {
+    const d = new Date();
+    if (period === 'yesterday') d.setDate(d.getDate() - 1);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    selectedDate = `${year}-${month}-${day}`;
+  }
   params.set('date', selectedDate);
   if (shift !== 'ALL') params.set('shift', shift);
   if (gateId !== 'ALL') params.set('gate_id', gateId);
-  if (worker.trim()) params.set('worker', worker.trim());
+  if (worker && worker.trim()) params.set('worker', worker.trim());
   return `?${params.toString()}`;
 }
 

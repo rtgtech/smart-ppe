@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routes import operations, workers
+from app.api.v1.routes import entry, operations, workers
 from app.core.config import get_settings
 from app.db.init_db import init_db
 from app.services.vision import (
@@ -29,19 +29,23 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup() -> None:
     init_db()
-    await start_vision_services()
+    if settings.deployment_role != "central":
+        await start_vision_services()
+    await entry.start_entry_services()
 
 
 @app.on_event("shutdown")
-def on_shutdown() -> None:
+async def on_shutdown() -> None:
+    await entry.stop_entry_services()
     stop_vision_services()
 
 
 @app.get("/health")
 def health_check() -> dict[str, Any]:
-    return {"status": "ok", "vision": health_snapshot()}
+    return {"status": "ok", "role": settings.deployment_role, "vision": health_snapshot() if settings.deployment_role != "central" else {"status": "disabled"}}
 
 
 app.include_router(workers.router, prefix=settings.api_v1_prefix)
 app.include_router(operations.router, prefix=settings.api_v1_prefix)
+app.include_router(entry.router, prefix=settings.api_v1_prefix)
 app.include_router(vision_router)

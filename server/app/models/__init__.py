@@ -5,6 +5,7 @@ from app.models.compliance_log import ComplianceLog
 from app.models.department import Department
 from app.models.device import Device
 from app.models.gate import Gate
+from app.models.gate_event import GateEvent, SyncOutbox
 from app.models.mine import Mine
 from app.models.notification import Notification
 from app.models.ppe_detection import PpeDetection
@@ -23,6 +24,7 @@ __all__ = [
     "Department",
     "Device",
     "Gate",
+    "GateEvent",
     "Mine",
     "Notification",
     "PpeDetection",
@@ -30,6 +32,7 @@ __all__ = [
     "Report",
     "SafetyScore",
     "SeedState",
+    "SyncOutbox",
     "Worker",
     "WorkerPpe",
 ]

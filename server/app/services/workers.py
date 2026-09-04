@@ -26,10 +26,6 @@ def get_worker_by_code(db: Session, employee_code: str) -> Worker | None:
     return db.query(Worker).filter(func.lower(Worker.employee_code) == employee_code.lower()).one_or_none()
 
 
-def get_worker_by_rfid(db: Session, rfid_uid: str) -> Worker | None:
-    return db.query(Worker).filter(func.lower(Worker.rfid_uid) == rfid_uid.lower()).one_or_none()
-
-
 def create_worker(db: Session, payload: WorkerCreate) -> Worker:
     worker = Worker(**payload.model_dump())
     db.add(worker)

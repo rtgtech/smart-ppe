@@ -4,6 +4,8 @@ from app.schemas.common import AlertSeverity, AlertStatus, OrmModel, datetime
 
 
 class AlertBase(BaseModel):
+    event_id: str | None = None
+    gate_id: int | None = Field(default=None, gt=0)
     log_id: int | None = Field(default=None, gt=0)
     worker_id: int | None = Field(default=None, gt=0)
     alert_type: str = Field(min_length=1, max_length=50)

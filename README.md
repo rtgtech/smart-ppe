@@ -112,10 +112,10 @@ Open the URL printed by Vite, normally:
 http://localhost:5173
 ```
 
-The live verification page is:
+The gate entry workflow starts at:
 
 ```text
-http://localhost:5173/#/live
+http://localhost:5173/#/entry/biometric
 ```
 
 Select **Start Verification** and allow camera permission. Raw camera video is
@@ -136,12 +136,18 @@ server:
 | `FACE_RECOGNIZER_PATH` | SFace model under `stream_test/server/models` | Face recognizer path |
 | `FACE_REGISTRY_PATH` | `stream_test/server/data/faces.json` | Enrolled face-template registry |
 | `FACE_SIMILARITY_THRESHOLD` | `0.363` | Minimum face-match similarity |
+| `EDGE_DEVICE_SERIAL` | `AI-CAM-G01` | Local AI camera and gate identity |
+| `SURAKSHA_ROLE` | `edge` | Run as `edge` or `central` |
+| `CENTRAL_SYNC_URL` | Empty | Central API base URL for the durable outbox |
+| `SYNC_API_TOKEN` | Empty | Shared deployment secret for central ingestion |
+| `ENTRY_IDENTITY_TIMEOUT_SECONDS` | `10` | Identity evidence deadline |
+| `ENTRY_EVIDENCE_TIMEOUT_SECONDS` | `15` | PPE and QR evidence deadline |
 
-The client connects to `ws://<current-host>:8000/ws/inference` by default. To
-use another server, create `client/.env` containing:
+The client connects to the event-specific entry WebSocket on port 8000 by
+default. To use another server, create `client/.env` containing:
 
 ```dotenv
-VITE_VISION_WS_URL=ws://127.0.0.1:8000/ws/inference
+VITE_ENTRY_WS_URL=ws://127.0.0.1:8000/api/v1/entry/attempts
 ```
 
 Restart Vite after changing client environment variables. Use `wss://` when the
@@ -155,9 +161,14 @@ client is served over HTTPS.
 - `POST /api/faces` - register a face using exactly five JPEG images
 - `PUT /api/faces/{person_id}` - replace an enrolled face template
 - `DELETE /api/faces/{person_id}` - delete a face profile
-- `WS /ws/inference` - JPEG input and annotated JPEG output
+- `POST /api/v1/entry/attempts` - create or resume an idempotent entry attempt
+- `WS /api/v1/entry/attempts/{event_id}/stream` - integrated face, PPE, and QR pipeline
+- `POST /api/v1/entry/sync/events` - idempotent central synchronization receiver
 
 ## Build and validation
+
+YOLO dataset preparation and release validation are documented in
+[`docs/yolo-training.md`](docs/yolo-training.md).
 
 Build the frontend for production:
 
@@ -188,7 +199,7 @@ cd D:\smart-ppe\server
 - Open `/health` and verify that `vision.status` is `ok`.
 - Allow camera permission in the browser.
 - Use `localhost` or HTTPS; browsers block camera access on insecure remote URLs.
-- Check `VITE_VISION_WS_URL` if the server is using a different host or port.
+- Check `VITE_ENTRY_WS_URL` if the edge server is using a different host or port.
 
 ### The server reports a missing model
 

@@ -4,14 +4,13 @@ import { Camera, LoaderCircle, RefreshCw, WifiOff } from 'lucide-react';
 const MAX_FRAME_WIDTH = 960;
 const TARGET_FPS = 12;
 
-function getWebSocketUrl() {
-  if (import.meta.env.VITE_VISION_WS_URL) return import.meta.env.VITE_VISION_WS_URL;
-  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
+function getWebSocketUrl(eventId) {
+  if (import.meta.env.VITE_ENTRY_WS_URL) return `${import.meta.env.VITE_ENTRY_WS_URL.replace(/\/$/, '')}/${eventId}/stream`;
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.hostname}:8000/ws/inference`;
+  return `${protocol}//${window.location.hostname}:8000/api/v1/entry/attempts/${eventId}/stream`;
 }
 
-export default function AnnotatedVisionFeed({ active, onConnectionChange, onFrameMeta }) {
+export default function AnnotatedVisionFeed({ active, eventId, onConnectionChange, onFrameMeta }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const socketRef = useRef(null);
@@ -99,13 +98,13 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange, onFram
         videoRef.current.srcObject = media;
         await videoRef.current.play();
 
-        const socket = new WebSocket(getWebSocketUrl());
+        if (!eventId) throw new Error('No entry attempt is active.');
+        const socket = new WebSocket(getWebSocketUrl(eventId));
         let socketFailed = false;
         socket.binaryType = 'blob';
         socketRef.current = socket;
         socket.onopen = () => {
           if (!isCurrent()) return;
-          socket.send(JSON.stringify({ type: 'config', confidence: 0.5 }));
           updateConnection('online');
           sendFrame();
           timerRef.current = window.setInterval(sendFrame, Math.round(1000 / TARGET_FPS));
@@ -118,7 +117,7 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange, onFram
               if (message.type === 'error') {
                 waitingRef.current = false;
                 setError(message.message || 'The inference server reported an error.');
-              } else if (message.type === 'frame_meta') {
+              } else if (message.type === 'frame_meta' || message.type === 'entry_meta') {
                 onFrameMeta?.(message);
               }
             } catch {
@@ -162,7 +161,7 @@ export default function AnnotatedVisionFeed({ active, onConnectionChange, onFram
       cancelled = true;
       release();
     };
-  }, [active, onFrameMeta, release, retry, sendFrame, updateConnection]);
+  }, [active, eventId, onFrameMeta, release, retry, sendFrame, updateConnection]);
   /* oxlint-enable react/set-state-in-effect */
 
   useEffect(() => () => {

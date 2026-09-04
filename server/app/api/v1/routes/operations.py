@@ -18,13 +18,13 @@ from app.models import (
     Department,
     Device,
     Gate,
+    GateEvent,
     Mine,
     PpeDetection,
     PpeItem,
     Report,
     SafetyScore,
     Worker,
-    WorkerPpe,
 )
 from app.schemas.alert import AlertCreate, AlertUpdate
 from app.schemas.attendance_log import AttendanceLogCreate, AttendanceLogUpdate
@@ -45,70 +45,14 @@ class StatusPatch(BaseModel):
     status: str
 
 
-class GateItemScan(BaseModel):
-    item_id: str
-    ppe_id: int
-
-
-class GateVisionDetection(BaseModel):
-    label: str
-    confidence: float
-    bbox: list[float] | None = None
-
-
-class GateCheckRequest(BaseModel):
-    employee_code: str
-    gate_id: int
-    face_verified: bool
-    face_confidence: float = 0
-    scanned_items: list[GateItemScan]
-    detections: list[GateVisionDetection]
-
-
-PPE_VISION_LABELS = {
-    "Helmet": "helmet",
-    "Reflective Vest": "vest",
-    "Safety Boots": "boots",
-}
-
-
-def _gate_required_items(db: Session, worker: Worker) -> list[dict]:
-    assignments = {
-        assignment.ppe_id: assignment
-        for assignment in db.query(WorkerPpe).filter(
-            WorkerPpe.worker_id == worker.worker_id,
-            WorkerPpe.status == "ACTIVE",
-        ).all()
-    }
-    items = db.query(PpeItem).filter(
-        PpeItem.is_mandatory.is_(True),
-        PpeItem.name.in_(PPE_VISION_LABELS),
-    ).order_by(PpeItem.ppe_id).all()
-    return [
-        {
-            "ppe_id": item.ppe_id,
-            "name": item.name,
-            "description": item.description,
-            "vision_label": PPE_VISION_LABELS[item.name],
-            "item_id": (
-                assignments[item.ppe_id].serial_number
-                or assignments[item.ppe_id].rfid_tag
-                or f"PPE-{item.ppe_id}"
-            ) if item.ppe_id in assignments else f"PPE-{item.ppe_id}",
-        }
-        for item in items
-    ]
-
-
 def _date_filters(query, model, selected_date: date_type | None, shift: str | None, gate_id: int | None, worker: str | None = None):
     if selected_date:
-        query = query.filter(func.date(model.entry_time) == selected_date)
+        query = query.filter(func.date(model.entry_time) == str(selected_date))
     if gate_id:
         query = query.filter(model.gate_id == gate_id)
-    if shift or worker:
+    if worker:
         query = query.join(Worker, Worker.worker_id == model.worker_id)
-        if shift: query = query.filter(Worker.designation.ilike(f"%Shift {shift}%"))
-        if worker: query = query.filter((Worker.name.ilike(f"%{worker}%")) | (Worker.employee_code.ilike(f"%{worker}%")))
+        query = query.filter((Worker.name.ilike(f"%{worker}%")) | (Worker.employee_code.ilike(f"%{worker}%")))
     return query
 
 
@@ -123,7 +67,13 @@ def _query_filters(date: str | None, shift: str | None, gate_id: int | None):
 def _date_label(value: datetime | None) -> str:
     if value is None:
         return "—"
-    return value.astimezone(timezone.utc).strftime("%d %b, %H:%M")
+    return value.strftime("%d %b, %H:%M")
+
+
+def _format_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _gate_row(db: Session, gate: Gate) -> dict:
@@ -176,7 +126,7 @@ def _alert_row(alert: Alert) -> dict:
         "worker_id": alert.worker_id,
         "worker": alert.worker.name if alert.worker else "—",
         "detail": alert.message,
-        "gate": alert.compliance_log.gate.name if alert.compliance_log and alert.compliance_log.gate else "—",
+        "gate": alert.gate.name if alert.gate else alert.compliance_log.gate.name if alert.compliance_log and alert.compliance_log.gate else "—",
         "time": _date_label(alert.created_at),
         "status": alert.status,
         "officer": "—",
@@ -184,36 +134,82 @@ def _alert_row(alert: Alert) -> dict:
     }
 
 
-def _attendance_row(log: AttendanceLog) -> dict:
+def _attendance_row(log: AttendanceLog, db: Session | None = None) -> dict:
+    ppe_status = "VERIFIED"
+    if db is not None:
+        compliance = (
+            db.query(ComplianceLog)
+            .filter(
+                ComplianceLog.worker_id == log.worker_id,
+                ComplianceLog.gate_id == log.gate_id,
+                ComplianceLog.entry_time >= log.entry_time - timedelta(minutes=30),
+                ComplianceLog.entry_time <= log.entry_time + timedelta(minutes=30),
+            )
+            .order_by(ComplianceLog.entry_time.desc())
+            .first()
+        )
+        if compliance:
+            ppe_status = "VERIFIED" if compliance.overall_status == "COMPLIANT" else "FLAGGED" if compliance.overall_status == "WARNING" else "DENIED"
+
     return {
         "attendance_id": log.attendance_id,
-        "worker": log.worker.name,
-        "workerId": log.worker.employee_code,
-        "entry": log.entry_time,
-        "exit": log.exit_time,
-        "ppe": "—",
-        "location": log.gate.location,
-        "status": log.status,
+        "worker_id": log.worker_id,
+        "worker": log.worker.name if log.worker else "Unknown",
+        "workerId": log.worker.employee_code if log.worker else "—",
+        "department": log.worker.department.name if log.worker and log.worker.department else "Unassigned",
+        "gate_id": log.gate_id,
+        "gate": log.gate.name if log.gate else "—",
+        "location": log.gate.location if log.gate else "Main Shaft Entry",
+        "entry": _format_iso(log.entry_time),
+        "exit": _format_iso(log.exit_time),
+        "ppe": ppe_status,
+        "status": "UNDERGROUND" if log.status in ["INSIDE", "PRESENT"] and not log.exit_time else "EXITED",
+        "raw_status": log.status,
     }
 
 
-def _compliance_row(log: ComplianceLog) -> dict:
-    return {
+def _compliance_row(log: ComplianceLog, db: Session | None = None) -> dict:
+    event = db.get(GateEvent, log.event_id) if db is not None and log.event_id else None
+    row = {
         "log_id": log.log_id,
-        "id": f"EVT-{log.log_id:05d}",
-        "eventId": f"EVT-{log.log_id:05d}",
-        "time": log.entry_time,
-        "worker": log.worker.name,
-        "workerId": log.worker.employee_code,
-        "gate": log.gate.name,
-        "decision": {"COMPLIANT": "ALLOWED", "NON_COMPLIANT": "WARNING", "DENIED": "DENIED"}.get(log.overall_status, log.overall_status),
-        "source": "AI CAMERA",
+        "id": log.event_id or f"EVT-{log.log_id:05d}",
+        "eventId": log.event_id or f"EVT-{log.log_id:05d}",
+        "time": _format_iso(log.entry_time),
+        "worker": log.worker.name if log.worker else "Unknown",
+        "workerId": log.worker.employee_code if log.worker else "—",
+        "gate": log.gate.name if log.gate else "—",
+        "decision": log.final_verdict or {"COMPLIANT": "ALLOWED", "NON_COMPLIANT": "WARNING", "DENIED": "DENIED"}.get(log.overall_status, log.overall_status),
+        "source": "YOLO + SFACE + OPENCV QR" if log.event_id else "AI CAMERA",
         "compliance_score": log.compliance_score,
         "confidence_score": log.confidence_score,
         "offline": log.offline_flag,
         "sync_status": log.sync_status,
         "type": "PPE verification",
-        "status": log.sync_status.title(),
+        "status": log.sync_status.title() if log.sync_status else "Synced",
+    }
+    if event:
+        row.update({
+            "device_id": event.device_id,
+            "latitude": event.gate_latitude,
+            "longitude": event.gate_longitude,
+            "edge_timestamp": _format_iso(event.edge_timestamp),
+            "reasons": json.loads(event.reasons_json),
+            "qr_results": json.loads(event.qr_results_json),
+            "evidence": json.loads(event.evidence_json).get("summary", {}),
+        })
+    return row
+
+
+def _gate_event_row(event: GateEvent) -> dict:
+    return {
+        "id": event.event_id, "eventId": event.event_id, "time": _format_iso(event.edge_timestamp),
+        "worker": event.worker.name if event.worker else "Unknown", "workerId": event.worker.employee_code if event.worker else "—",
+        "gate": event.gate.name if event.gate else "—", "decision": event.verdict, "source": "YOLO + SFACE + OPENCV QR",
+        "confidence_score": event.evidence_confidence, "offline": event.offline_flag, "sync_status": event.sync_status,
+        "type": "Gate entry", "status": event.sync_status.title(), "device_id": event.device_id,
+        "latitude": event.gate_latitude, "longitude": event.gate_longitude,
+        "reasons": json.loads(event.reasons_json), "qr_results": json.loads(event.qr_results_json),
+        "evidence": json.loads(event.evidence_json).get("summary", {}),
     }
 
 
@@ -418,146 +414,13 @@ def list_ppe_items(db: Session = Depends(get_db)):
     return db.query(PpeItem).order_by(PpeItem.ppe_id).all()
 
 
-@router.get("/gate-checks/context/{employee_code}")
-def gate_check_context(employee_code: str, db: Session = Depends(get_db)):
-    worker = db.query(Worker).filter(
-        func.upper(Worker.employee_code) == employee_code.strip().upper(),
-        Worker.status == "ACTIVE",
-    ).one_or_none()
-    if worker is None:
-        raise HTTPException(404, "Active worker not found")
-    gate = db.query(Gate).filter(Gate.status == "ACTIVE").order_by(Gate.gate_id).first()
-    if gate is None:
-        raise HTTPException(503, "No active mine checkpoint is configured")
-    return {
-        "worker": {
-            "worker_id": worker.worker_id,
-            "employee_code": worker.employee_code,
-            "name": worker.name,
-            "department": worker.department.name if worker.department else "",
-        },
-        "gate": {"gate_id": gate.gate_id, "name": gate.name, "location": gate.location},
-        "required_items": _gate_required_items(db, worker),
-    }
-
-
-@router.get("/gate-checks/resolve-item/{employee_code}")
-def resolve_gate_item(employee_code: str, item_id: str = Query(..., min_length=1, max_length=128), db: Session = Depends(get_db)):
-    worker = db.query(Worker).filter(func.upper(Worker.employee_code) == employee_code.strip().upper()).one_or_none()
-    if worker is None:
-        raise HTTPException(404, "Worker not found")
-    normalized = item_id.strip().upper()
-    for item in _gate_required_items(db, worker):
-        accepted_ids = {item["item_id"].upper(), f"PPE-{item['ppe_id']}", str(item["ppe_id"])}
-        if normalized in accepted_ids:
-            return item
-    raise HTTPException(404, "This PPE item is not required or assigned to this worker")
-
-
-@router.post("/gate-checks/complete", status_code=status.HTTP_201_CREATED)
-def complete_gate_check(payload: GateCheckRequest, db: Session = Depends(get_db)):
-    worker = db.query(Worker).filter(
-        func.upper(Worker.employee_code) == payload.employee_code.strip().upper(),
-        Worker.status == "ACTIVE",
-    ).one_or_none()
-    if worker is None:
-        raise HTTPException(404, "Active worker not found")
-    gate = db.get(Gate, payload.gate_id)
-    if gate is None or gate.status != "ACTIVE":
-        raise HTTPException(404, "Active mine checkpoint not found")
-
-    required = _gate_required_items(db, worker)
-    if not required:
-        raise HTTPException(409, "No camera-verifiable mandatory PPE is configured")
-    required_by_id = {item["ppe_id"]: item for item in required}
-    required_ids = set(required_by_id)
-    valid_scans = {}
-    for scan in payload.scanned_items:
-        item = required_by_id.get(scan.ppe_id)
-        if item is None:
-            continue
-        accepted_ids = {item["item_id"].upper(), f"PPE-{item['ppe_id']}", str(item["ppe_id"])}
-        if scan.item_id.strip().upper() in accepted_ids:
-            valid_scans[scan.ppe_id] = scan
-    scanned_ids = set(valid_scans)
-    best_detection = {}
-    for detection in payload.detections:
-        key = detection.label.strip().lower()
-        if key not in best_detection or detection.confidence > best_detection[key].confidence:
-            best_detection[key] = detection
-
-    visible_ids = {item["ppe_id"] for item in required if item["vision_label"] in best_detection}
-    passed_checks = int(payload.face_verified) + len(required_ids & scanned_ids & visible_ids)
-    total_checks = 1 + len(required_ids)
-    compliant = payload.face_verified and required_ids <= scanned_ids and required_ids <= visible_ids
-    now = datetime.now(timezone.utc)
-    confidence_values = [max(0, min(100, payload.face_confidence * 100))]
-    confidence_values.extend(
-        max(0, min(100, best_detection[item["vision_label"]].confidence * 100))
-        for item in required if item["vision_label"] in best_detection
-    )
-
-    log = ComplianceLog(
-        worker_id=worker.worker_id,
-        gate_id=gate.gate_id,
-        entry_time=now,
-        overall_status="COMPLIANT" if compliant else "DENIED",
-        compliance_score=round(passed_checks * 100 / total_checks, 1),
-        confidence_score=round(sum(confidence_values) / len(confidence_values), 1),
-        offline_flag=False,
-        sync_status="SYNCED",
-    )
-    db.add(log)
-    db.flush()
-
-    scanned_by_id = valid_scans
-    for item in required:
-        detection = best_detection.get(item["vision_label"])
-        db.add(PpeDetection(
-            log_id=log.log_id,
-            ppe_id=item["ppe_id"],
-            detected=detection is not None,
-            confidence_score=round(detection.confidence * 100, 1) if detection else None,
-            bounding_box=json.dumps(detection.bbox) if detection and detection.bbox else None,
-            detection_source="AI",
-        ))
-        scan = scanned_by_id.get(item["ppe_id"])
-        db.add(PpeDetection(
-            log_id=log.log_id,
-            ppe_id=item["ppe_id"],
-            detected=scan is not None,
-            confidence_score=100 if scan else None,
-            bounding_box=json.dumps({"item_id": scan.item_id}) if scan else None,
-            detection_source="RFID",
-        ))
-
-    attendance = None
-    if compliant:
-        attendance = AttendanceLog(worker_id=worker.worker_id, gate_id=gate.gate_id, entry_time=now, status="INSIDE")
-        db.add(attendance)
-    db.commit()
-    db.refresh(log)
-    if attendance:
-        db.refresh(attendance)
-    return {
-        "allowed": compliant,
-        "verdict": "ENTRY ALLOWED" if compliant else "ENTRY DENIED",
-        "compliance": _compliance_row(log),
-        "attendance": _attendance_row(attendance) if attendance else None,
-        "missing": [
-            item["name"] for item in required
-            if item["ppe_id"] not in scanned_ids or item["ppe_id"] not in visible_ids
-        ] + ([] if payload.face_verified else ["Verified face"]),
-    }
-
-
 @router.get("/ppe/summary")
 def ppe_summary(date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
     items = db.query(PpeItem).order_by(PpeItem.ppe_id).all()
     rows = []
     for item in items:
-        query = db.query(PpeDetection).join(ComplianceLog, PpeDetection.log_id == ComplianceLog.log_id).filter(PpeDetection.ppe_id == item.ppe_id)
+        query = db.query(PpeDetection).join(ComplianceLog, PpeDetection.log_id == ComplianceLog.log_id).filter(PpeDetection.ppe_id == item.ppe_id, PpeDetection.detection_source == "AI", ComplianceLog.overall_status.in_(["COMPLIANT", "DENIED"]))
         current = _date_filters(query, ComplianceLog, selected, shift, gate_id, worker)
         total = current.with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
         detected = current.filter(PpeDetection.detected.is_(True)).with_entities(func.count(PpeDetection.detection_id)).scalar() or 0
@@ -595,7 +458,7 @@ def ppe_trend(date: str | None = None, shift: str | None = None, gate_id: int | 
 @router.get("/ppe/violations")
 def common_ppe_violations(date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
-    query = db.query(PpeItem.name, func.count(PpeDetection.detection_id)).join(PpeDetection, PpeDetection.ppe_id == PpeItem.ppe_id).join(ComplianceLog, PpeDetection.log_id == ComplianceLog.log_id).filter(PpeDetection.detected.is_(False))
+    query = db.query(PpeItem.name, func.count(PpeDetection.detection_id)).join(PpeDetection, PpeDetection.ppe_id == PpeItem.ppe_id).join(ComplianceLog, PpeDetection.log_id == ComplianceLog.log_id).filter(PpeDetection.detected.is_(False), ComplianceLog.overall_status == "DENIED")
     query = _date_filters(query, ComplianceLog, selected, shift, gate_id, worker)
     totals = query.group_by(PpeItem.name).order_by(func.count(PpeDetection.detection_id).desc()).all()
     total = sum(value for _, value in totals)
@@ -646,32 +509,108 @@ def delete_ppe_item(ppe_id: int, db: Session = Depends(get_db)):
     return Response(status_code=204)
 
 
+class CheckInRequest(BaseModel):
+    worker_id: int | None = None
+    employee_code: str | None = None
+    gate_id: int
+    entry_time: str | datetime | None = None
+
+
 @router.get("/attendance")
 def list_attendance(limit: int = Query(500, ge=1, le=5000), date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
     logs = _date_filters(db.query(AttendanceLog), AttendanceLog, selected, shift, gate_id, worker).order_by(AttendanceLog.entry_time.desc()).limit(limit).all()
-    return [_attendance_row(log) for log in logs]
+    return [_attendance_row(log, db) for log in logs]
 
 
 @router.get("/attendance/kpi")
 def attendance_kpi(date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
-    selected = selected or datetime.now(timezone.utc).date()
+    selected = selected or datetime.now().date()
     query = _date_filters(db.query(AttendanceLog), AttendanceLog, selected, shift, gate_id, worker)
     entered = query.with_entities(func.count(AttendanceLog.attendance_id)).scalar() or 0
-    exited = query.filter(func.date(AttendanceLog.exit_time) == selected).with_entities(func.count(AttendanceLog.attendance_id)).scalar() or 0
-    underground = query.filter(AttendanceLog.status.in_(["PRESENT", "INSIDE"])).with_entities(func.count(func.distinct(AttendanceLog.worker_id))).scalar() or 0
-    missing = query.filter(AttendanceLog.exit_time.is_(None)).with_entities(func.count(AttendanceLog.attendance_id)).scalar() or 0
+    exited = query.filter(func.date(AttendanceLog.exit_time) == str(selected)).with_entities(func.count(AttendanceLog.attendance_id)).scalar() or 0
+    underground = query.filter(AttendanceLog.status.in_(["PRESENT", "INSIDE"]), AttendanceLog.exit_time.is_(None)).with_entities(func.count(func.distinct(AttendanceLog.worker_id))).scalar() or 0
+    missing = query.filter(AttendanceLog.exit_time.is_(None), func.date(AttendanceLog.entry_time) < str(selected)).with_entities(func.count(AttendanceLog.attendance_id)).scalar() or 0
     return {"enteredToday": entered, "exitedToday": exited, "currentlyUnderground": underground, "missingExitScans": missing}
 
 
 @router.get("/attendance/zones")
 def attendance_zones(date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
-    query = db.query(Gate.location, func.count(func.distinct(AttendanceLog.worker_id))).join(AttendanceLog, AttendanceLog.gate_id == Gate.gate_id).filter(AttendanceLog.status.in_(["PRESENT", "INSIDE"]))
+    all_gates = db.query(Gate).all()
+    zone_counts: dict[str, int] = {gate.location: 0 for gate in all_gates}
+    query = db.query(Gate.location, func.count(func.distinct(AttendanceLog.worker_id))).join(AttendanceLog, AttendanceLog.gate_id == Gate.gate_id).filter(AttendanceLog.status.in_(["PRESENT", "INSIDE"]), AttendanceLog.exit_time.is_(None))
     query = _date_filters(query, AttendanceLog, selected, shift, gate_id, worker)
     rows = query.group_by(Gate.location).all()
-    return [{"zone": location, "count": count} for location, count in rows]
+    for location, count in rows:
+        zone_counts[location] = count
+    return [{"zone": location, "count": count} for location, count in zone_counts.items()]
+
+
+@router.post("/attendance/check-in", status_code=status.HTTP_201_CREATED)
+def check_in_worker(payload: CheckInRequest, db: Session = Depends(get_db)):
+    if payload.worker_id:
+        worker = db.get(Worker, payload.worker_id)
+    elif payload.employee_code:
+        worker = db.query(Worker).filter(func.lower(Worker.employee_code) == payload.employee_code.strip().lower()).one_or_none()
+    else:
+        raise HTTPException(400, "worker_id or employee_code required")
+    if worker is None:
+        raise HTTPException(404, "Worker not found")
+    gate = db.get(Gate, payload.gate_id)
+    if gate is None:
+        raise HTTPException(404, "Gate not found")
+
+    if payload.entry_time:
+        if isinstance(payload.entry_time, str):
+            clean_str = payload.entry_time.replace("Z", "")
+            try:
+                now = datetime.fromisoformat(clean_str)
+            except Exception:
+                now = datetime.now()
+        else:
+            now = payload.entry_time
+    else:
+        now = datetime.now()
+
+    existing = (
+        db.query(AttendanceLog)
+        .filter(AttendanceLog.worker_id == worker.worker_id, AttendanceLog.exit_time.is_(None))
+        .order_by(AttendanceLog.entry_time.desc())
+        .first()
+    )
+    if existing:
+        existing.gate_id = payload.gate_id
+        existing.status = "PRESENT"
+        if payload.entry_time:
+            existing.entry_time = now
+        db.commit()
+        db.refresh(existing)
+        return _attendance_row(existing, db)
+
+    log = AttendanceLog(
+        worker_id=worker.worker_id,
+        gate_id=gate.gate_id,
+        entry_time=now,
+        status="PRESENT",
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return _attendance_row(log, db)
+
+
+@router.post("/attendance/{attendance_id}/checkout")
+def check_out_worker(attendance_id: int, db: Session = Depends(get_db)):
+    log = db.get(AttendanceLog, attendance_id)
+    if log is None:
+        raise HTTPException(404, "Attendance record not found")
+    log.exit_time = datetime.now()
+    log.status = "OUTSIDE"
+    db.commit()
+    db.refresh(log)
+    return _attendance_row(log, db)
 
 
 @router.post("/attendance", status_code=status.HTTP_201_CREATED)
@@ -680,7 +619,7 @@ def create_attendance(payload: AttendanceLogCreate, db: Session = Depends(get_db
     db.add(log)
     db.commit()
     db.refresh(log)
-    return _attendance_row(log)
+    return _attendance_row(log, db)
 
 
 @router.get("/attendance/{attendance_id}")
@@ -688,7 +627,7 @@ def get_attendance(attendance_id: int, db: Session = Depends(get_db)):
     log = db.get(AttendanceLog, attendance_id)
     if log is None:
         raise HTTPException(404, "Attendance record not found")
-    return _attendance_row(log)
+    return _attendance_row(log, db)
 
 
 @router.patch("/attendance/{attendance_id}")
@@ -700,7 +639,7 @@ def update_attendance(attendance_id: int, payload: AttendanceLogUpdate, db: Sess
         setattr(log, field, value)
     db.commit()
     db.refresh(log)
-    return _attendance_row(log)
+    return _attendance_row(log, db)
 
 
 @router.delete("/attendance/{attendance_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -718,10 +657,10 @@ def list_alerts(date: str | None = None, shift: str | None = None, gate_id: int 
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
     query = db.query(Alert).outerjoin(ComplianceLog, Alert.log_id == ComplianceLog.log_id)
     if selected: query = query.filter(func.date(Alert.created_at) == selected)
-    if gate_id: query = query.filter(ComplianceLog.gate_id == gate_id)
+    if gate_id: query = query.filter((Alert.gate_id == gate_id) | (ComplianceLog.gate_id == gate_id))
     if shift or worker:
         query = query.join(Worker, Worker.worker_id == Alert.worker_id)
-        if shift: query = query.filter(Worker.designation.ilike(f"%Shift {shift}%"))
+        # Shift is retained in the public filter contract but workers no longer store a shift designation.
         if worker: query = query.filter((Worker.name.ilike(f"%{worker}%")) | (Worker.employee_code.ilike(f"%{worker}%")))
     return [_alert_row(alert) for alert in query.order_by(Alert.created_at.desc()).all()]
 
@@ -773,7 +712,7 @@ def list_compliance(limit: int = Query(500, ge=1, le=5000), sync_status: str | N
     if worker_id:
         query = query.filter(ComplianceLog.worker_id == worker_id)
     logs = query.order_by(ComplianceLog.entry_time.desc()).limit(limit).all()
-    return [_compliance_row(log) for log in logs]
+    return [_compliance_row(log, db) for log in logs]
 
 
 @router.post("/compliance", status_code=status.HTTP_201_CREATED)
@@ -782,7 +721,7 @@ def create_compliance(payload: ComplianceLogCreate, db: Session = Depends(get_db
     db.add(log)
     db.commit()
     db.refresh(log)
-    return _compliance_row(log)
+    return _compliance_row(log, db)
 
 
 @router.get("/compliance/{log_id}")
@@ -790,7 +729,7 @@ def get_compliance(log_id: int, db: Session = Depends(get_db)):
     log = db.get(ComplianceLog, log_id)
     if log is None:
         raise HTTPException(404, "Compliance log not found")
-    return _compliance_row(log)
+    return _compliance_row(log, db)
 
 
 @router.patch("/compliance/{log_id}")
@@ -802,7 +741,7 @@ def update_compliance(log_id: int, payload: ComplianceLogUpdate, db: Session = D
         setattr(log, field, value)
     db.commit()
     db.refresh(log)
-    return _compliance_row(log)
+    return _compliance_row(log, db)
 
 
 @router.delete("/compliance/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -823,7 +762,11 @@ def list_reports(date: str | None = None, shift: str | None = None, gate_id: int
     reports = [_report_row(report, db) for report in query.order_by(Report.generated_at.desc()).all()]
     # Report metadata is scoped to the same event slice as the operational pages.
     event_query = _date_filters(db.query(ComplianceLog), ComplianceLog, selected, shift, gate_id, worker)
-    event_count = event_query.with_entities(func.count(ComplianceLog.log_id)).scalar() or 0
+    legacy_count = event_query.filter(ComplianceLog.event_id.is_(None)).with_entities(func.count(ComplianceLog.log_id)).scalar() or 0
+    gate_event_query = db.query(GateEvent).filter(GateEvent.lifecycle == "FINALIZED")
+    if selected: gate_event_query = gate_event_query.filter(func.date(GateEvent.edge_timestamp) == str(selected))
+    if gate_id: gate_event_query = gate_event_query.filter(GateEvent.gate_id == gate_id)
+    event_count = legacy_count + (gate_event_query.with_entities(func.count(GateEvent.event_id)).scalar() or 0)
     for report in reports: report["records"] = event_count
     return reports
 
@@ -869,8 +812,10 @@ def delete_report(report_id: int, db: Session = Depends(get_db)):
 
 @router.get("/audit")
 def list_audit(limit: int = Query(500, ge=1, le=5000), db: Session = Depends(get_db)):
-    logs = db.query(ComplianceLog).order_by(ComplianceLog.entry_time.desc()).limit(limit).all()
-    return [_compliance_row(log) for log in logs]
+    events = db.query(GateEvent).filter(GateEvent.lifecycle == "FINALIZED").order_by(GateEvent.edge_timestamp.desc()).limit(limit).all()
+    legacy = db.query(ComplianceLog).filter(ComplianceLog.event_id.is_(None)).order_by(ComplianceLog.entry_time.desc()).limit(limit).all()
+    rows = [_gate_event_row(event) for event in events] + [_compliance_row(log, db) for log in legacy]
+    return sorted(rows, key=lambda row: row.get("time") or "", reverse=True)[:limit]
 
 
 @router.get("/champions")
@@ -885,18 +830,16 @@ def list_champions(db: Session = Depends(get_db)):
 @router.get("/insights")
 def insights(date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
-    shift_query = db.query(Worker.designation, func.avg(ComplianceLog.compliance_score), func.count(ComplianceLog.log_id)).join(ComplianceLog, ComplianceLog.worker_id == Worker.worker_id)
+    shift_query = db.query(func.avg(ComplianceLog.compliance_score), func.count(ComplianceLog.log_id)).join(ComplianceLog, ComplianceLog.worker_id == Worker.worker_id)
     if selected: shift_query = shift_query.filter(func.date(ComplianceLog.entry_time) == selected)
     if gate_id: shift_query = shift_query.filter(ComplianceLog.gate_id == gate_id)
-    if shift: shift_query = shift_query.filter(Worker.designation.ilike(f"%Shift {shift}%"))
     if worker: shift_query = shift_query.filter((Worker.name.ilike(f"%{worker}%")) | (Worker.employee_code.ilike(f"%{worker}%")))
-    shift_rows = shift_query.group_by(Worker.designation).all()
+    shift_rows = shift_query.all()
     risk_query = db.query(Worker, SafetyScore).join(SafetyScore, SafetyScore.worker_id == Worker.worker_id)
-    if shift: risk_query = risk_query.filter(Worker.designation.ilike(f"%Shift {shift}%"))
     if worker: risk_query = risk_query.filter((Worker.name.ilike(f"%{worker}%")) | (Worker.employee_code.ilike(f"%{worker}%")))
     high_risk = risk_query.filter(SafetyScore.risk_level == "HIGH").order_by(SafetyScore.violation_count.desc()).all()
     return {
-        "shiftComparison": [{"shift": designation or "Unassigned", "compliance": round(float(avg), 1), "violations": 0} for designation, avg, _ in shift_rows],
+        "shiftComparison": [{"shift": "All", "compliance": round(float(avg), 1), "violations": 0} for avg, _ in shift_rows if avg is not None],
         "gateViolations": gate_violations(db),
         "highRiskWorkers": [{"id": worker.employee_code, "name": worker.name, "department": worker.department.name, "violations": score.violation_count} for worker, score in high_risk],
         "mostCommonViolations": common_ppe_violations(date, shift, gate_id, worker, db),
@@ -910,7 +853,7 @@ def dashboard(date: str | None = None, shift: str | None = None, gate_id: int | 
     workers_underground = attendance_query.filter(AttendanceLog.status.in_(["PRESENT", "INSIDE"])).with_entities(func.count(func.distinct(AttendanceLog.worker_id))).scalar() or 0
     todays_entries = attendance_query.with_entities(func.count(AttendanceLog.attendance_id)).scalar() or 0
     compliance_query = _date_filters(db.query(ComplianceLog), ComplianceLog, selected, shift, gate_id)
-    violations = compliance_query.filter(ComplianceLog.overall_status != "COMPLIANT").with_entities(func.count(ComplianceLog.log_id)).scalar() or 0
+    violations = compliance_query.filter(ComplianceLog.overall_status == "DENIED").with_entities(func.count(ComplianceLog.log_id)).scalar() or 0
     denied = compliance_query.filter(ComplianceLog.overall_status == "DENIED").with_entities(func.count(ComplianceLog.log_id)).scalar() or 0
     latest_scores = db.query(SafetyScore).order_by(SafetyScore.calculated_at.desc()).all()
     compliance = round(sum(s.compliance_rate for s in latest_scores) / len(latest_scores), 1) if latest_scores else None
@@ -925,5 +868,5 @@ def dashboard(date: str | None = None, shift: str | None = None, gate_id: int | 
         },
         "gates": list_gates(db),
         "ppeTrend": ppe_trend(date=date, shift=shift, gate_id=gate_id, db=db),
-        "recentEvents": [_compliance_row(log) for log in db.query(ComplianceLog).order_by(ComplianceLog.entry_time.desc()).limit(5).all()],
+        "recentEvents": ([_gate_event_row(event) for event in db.query(GateEvent).filter(GateEvent.lifecycle == "FINALIZED").order_by(GateEvent.edge_timestamp.desc()).limit(5).all()] or [_compliance_row(log, db) for log in db.query(ComplianceLog).order_by(ComplianceLog.entry_time.desc()).limit(5).all()]),
     }

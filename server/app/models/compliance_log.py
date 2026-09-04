@@ -16,6 +16,8 @@ class ComplianceLog(Base):
     )
 
     log_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_id: Mapped[str | None] = mapped_column(String(36), unique=True, index=True)
+    final_verdict: Mapped[str | None] = mapped_column(String(16), index=True)
     worker_id: Mapped[int] = mapped_column(ForeignKey("workers.worker_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
     gate_id: Mapped[int] = mapped_column(ForeignKey("gates.gate_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
     entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

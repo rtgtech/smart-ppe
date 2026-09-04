@@ -21,7 +21,7 @@ export const GATES = [
 ];
 
 export const WORKERS = [
-  { id: 'WK10234', name: 'Ramesh Kumar', department: 'Underground Mining', shift: 'A', ppeScore: 92, risk: 'HIGH', status: 'ACTIVE', rfidId: 'RFID-8F31A9', violations: 7, denials: 3, streak: 4 },
+  { id: 'WK10234', name: 'Ramesh Kumar', department: 'Mining', shift: 'A', ppeScore: 92, risk: 'HIGH', status: 'ACTIVE', rfidId: 'RFID-8F31A9', violations: 7, denials: 3, streak: 4 },
   { id: 'WK10211', name: 'Arun Kumar', department: 'Operations', shift: 'A', ppeScore: 99, risk: 'LOW', status: 'ACTIVE', rfidId: 'RFID-2C10B4', violations: 0, denials: 0, streak: 27 },
   { id: 'WK10209', name: 'Sanjay Singh', department: 'Electrical', shift: 'B', ppeScore: 88, risk: 'MEDIUM', status: 'ACTIVE', rfidId: 'RFID-77AE02', violations: 3, denials: 1, streak: 6 },
   { id: 'WK10198', name: 'Vikram Yadav', department: 'Maintenance', shift: 'A', ppeScore: 81, risk: 'HIGH', status: 'ACTIVE', rfidId: 'RFID-441FDD', violations: 9, denials: 4, streak: 1 },
@@ -29,7 +29,7 @@ export const WORKERS = [
   { id: 'WK10176', name: 'Ravi Shankar', department: 'Mining', shift: 'A', ppeScore: 98, risk: 'LOW', status: 'ACTIVE', rfidId: 'RFID-30AC77', violations: 1, denials: 0, streak: 22 },
   { id: 'WK10165', name: 'Deepak Verma', department: 'Transport', shift: 'C', ppeScore: 76, risk: 'HIGH', status: 'ACTIVE', rfidId: 'RFID-55E110', violations: 11, denials: 5, streak: 0 },
   { id: 'WK10154', name: 'Manoj Tiwari', department: 'Electrical', shift: 'B', ppeScore: 90, risk: 'MEDIUM', status: 'ACTIVE', rfidId: 'RFID-1A9F3C', violations: 4, denials: 1, streak: 8 },
-  { id: 'WK10143', name: 'Suresh Pal', department: 'Underground Mining', shift: 'A', ppeScore: 85, risk: 'MEDIUM', status: 'ON LEAVE', rfidId: 'RFID-C4402E', violations: 5, denials: 2, streak: 0 },
+  { id: 'WK10143', name: 'Suresh Pal', department: 'Mining', shift: 'A', ppeScore: 85, risk: 'MEDIUM', status: 'ON LEAVE', rfidId: 'RFID-C4402E', violations: 5, denials: 2, streak: 0 },
   { id: 'WK10132', name: 'Vijay Kumar', department: 'Operations', shift: 'C', ppeScore: 98, risk: 'LOW', status: 'ACTIVE', rfidId: 'RFID-8890AB', violations: 0, denials: 0, streak: 30 },
 ];
 
