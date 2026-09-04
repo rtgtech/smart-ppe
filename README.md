@@ -12,7 +12,7 @@ smart-ppe/
 |-- client/                         React + Vite frontend
 |-- server/                         FastAPI API and vision inference server
 |-- data/suraksha.db                Local SQLite database (created automatically)
-|-- best2.pt                        YOLO PPE model
+|-- best.pt                         YOLO PPE model
 `-- stream_test/server/
     |-- models/                     SCRFD ONNX and EdgeFace PyTorch models
     `-- data/faces.json             Local enrolled-face registry
@@ -33,7 +33,7 @@ must use HTTPS and a secure `wss://` WebSocket endpoint.
 Verify that these files exist before starting the server:
 
 ```text
-best2.pt
+best.pt
 stream_test/server/models/scrfd_10g_bnkps.onnx
 stream_test/server/models/edgeface_s_gamma_05.pt
 ```
@@ -132,8 +132,8 @@ not displayed; the page renders only frames annotated by the server.
 
 The entry workflow first confirms the worker's face on `/entry/biometric`.
 After identity is locked, the same camera and tracking session advances to
-`/entry/compliance`, where fresh frames verify Gloves, Goggles, Helmet, Mask,
-and both Shoes in their expected body regions before issuing the gate verdict.
+`/entry/compliance`, where fresh frames verify Helmet, Vest, and both Boots in
+their expected body regions before issuing the gate verdict.
 Identity advances on the first valid recognized frame; PPE requires three consistent observations. The result is discarded
 on **Process next worker** and unfinished sessions expire after ten minutes.
 
@@ -144,7 +144,7 @@ server:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `YOLO_MODEL_PATH` | `best2.pt` in the repository root | PPE model path; expected classes are `glove`, `goggles`, `helmet`, `mask`, `shoes`, and their `no_` counterparts |
+| `YOLO_MODEL_PATH` | `best.pt` in the repository root | PPE model path for Helmet, Vest, and Boots |
 | `YOLO_POSE_MODEL` | `yolo11n-pose.pt` | Pose checkpoint path or Ultralytics model name; a model name downloads on first run |
 | `YOLO_DEVICE` | Automatic | Inference device, such as `cpu` or `0` for the first CUDA GPU |
 | `YOLO_IMAGE_SIZE` | `640` | YOLO inference image size |

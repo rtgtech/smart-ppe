@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -10,12 +11,25 @@ from app.services.edgeface import ARCFACE_112_TEMPLATE, align_face
 from app.services.face_recognition import (
     EMBEDDING_MODEL_VERSION,
     LEGACY_EMBEDDING_MODEL_VERSION,
+    FaceEngine,
     FaceRegistry,
 )
-from app.services.scrfd import _distance_to_bbox, _distance_to_landmarks
+from app.services.scrfd import DetectedFace, _distance_to_bbox, _distance_to_landmarks
 
 
 class FaceModelAdapterTest(unittest.TestCase):
+    def test_enrollment_ignores_small_background_faces(self):
+        engine = object.__new__(FaceEngine)
+        landmarks = np.zeros((5, 2), dtype=np.float32)
+        primary = DetectedFace(np.array([50, 50, 250, 250], dtype=np.float32), landmarks, .99)
+        distant = DetectedFace(np.array([300, 50, 350, 100], dtype=np.float32), landmarks, .9)
+        with (
+            patch.object(engine, "detect", return_value=[primary, distant]),
+            patch.object(engine, "embedding_for_face", return_value=np.array([1., 0.], dtype=np.float32)),
+        ):
+            embedding = engine.enrollment_embedding([np.zeros((300, 400, 3), dtype=np.uint8)] * 5)
+        np.testing.assert_allclose(embedding, [1., 0.])
+
     def test_scrfd_distance_decoding(self):
         centers = np.array([[10.0, 20.0]], dtype=np.float32)
         box = _distance_to_bbox(

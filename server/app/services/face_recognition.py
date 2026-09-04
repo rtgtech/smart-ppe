@@ -148,10 +148,15 @@ class FaceEngine:
             raise FaceServiceError("Exactly five captures are required")
         vectors = []
         for index, image in enumerate(images, 1):
-            faces = self.detect(image)
-            if len(faces) != 1:
-                raise FaceServiceError(f"Capture {index} must contain exactly one face")
-            vectors.append(self.embedding_for_face(image, faces[0]))
+            faces = [face for face in self.detect(image) if min(face.bbox[2] - face.bbox[0], face.bbox[3] - face.bbox[1]) >= 64]
+            if not faces:
+                raise FaceServiceError(f"Capture {index}: move closer so your face is clearly visible")
+            primary = max(faces, key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
+            primary_area = (primary.bbox[2] - primary.bbox[0]) * (primary.bbox[3] - primary.bbox[1])
+            foreground = [face for face in faces if (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]) >= primary_area * .35]
+            if len(foreground) > 1:
+                raise FaceServiceError(f"Capture {index}: keep only one nearby face in frame")
+            vectors.append(self.embedding_for_face(image, primary))
         return normalize_embedding(np.mean(vectors, axis=0))
 
     def recognize(self, image: np.ndarray, candidates: list[tuple[str, str, np.ndarray]]) -> list[dict[str, Any]]:
@@ -160,13 +165,13 @@ class FaceEngine:
             try:
                 embedding = self.embedding_for_face(image, face)
             except FaceServiceError:
-                output.append({"bbox": [int(round(value)) for value in face.bbox], "recognized": False, "person_id": None, "name": "Move closer", "similarity": None})
+                output.append({"bbox": [int(round(value)) for value in face.bbox], "recognized": False, "ignored": True, "person_id": None, "name": "Move closer", "similarity": None})
                 continue
             matches = [(float(np.dot(embedding, vector)), person_id, name) for person_id, name, vector in candidates if vector.shape == embedding.shape]
             match = max(matches, default=None)
             known = bool(match and match[0] >= self.similarity_threshold)
             output.append({
-                "bbox": [int(round(value)) for value in face.bbox], "recognized": known,
+                "bbox": [int(round(value)) for value in face.bbox], "recognized": known, "ignored": False,
                 "person_id": match[1] if known else None, "name": match[2] if known else "Unknown",
                 "similarity": round(match[0], 4) if match else None,
             })

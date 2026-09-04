@@ -20,7 +20,7 @@ from app.services.ppe_compliance import PersonTracker, analyze_compliance, annot
 
 ROOT = Path(__file__).resolve().parents[3]
 MODEL_DIR = ROOT / "stream_test" / "server" / "models"
-PPE_PATH = Path(os.getenv("YOLO_MODEL_PATH", ROOT / "best2.pt")).resolve()
+PPE_PATH = Path(os.getenv("YOLO_MODEL_PATH", ROOT / "best.pt")).resolve()
 POSE_PATH = os.getenv("YOLO_POSE_MODEL", str(ROOT / "server" / "yolo11n-pose.pt"))
 REGISTRY_PATH = Path(os.getenv("FACE_REGISTRY_PATH", ROOT / "stream_test" / "server" / "data" / "faces.json")).resolve()
 MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", "5000000"))

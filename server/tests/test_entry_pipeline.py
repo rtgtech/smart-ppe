@@ -14,9 +14,17 @@ def face(person_id="WORKER1"):
     return [{"recognized": True, "person_id": person_id, "name": "Worker One", "similarity": .9}]
 
 
+def unknown():
+    return {"recognized": False, "person_id": None, "name": "Unknown", "similarity": .2}
+
+
+def distant():
+    return {"recognized": False, "ignored": True, "person_id": None, "name": "Move closer", "similarity": None}
+
+
 def person(helmet="YES"):
     row = {}
-    for item in ("glove", "goggles", "helmet", "mask", "shoes"):
+    for item in ("helmet", "vest", "boots"):
         row[item] = helmet if item == "helmet" else "YES"
         row[f"{item}_confidence"] = .9
     return [row]
@@ -50,6 +58,23 @@ class EntryPipelineTest(unittest.TestCase):
         session.add_identity(face(), False)
         self.assertEqual(session.phase, "EVIDENCE")
         self.assertEqual(session.worker["name"], "Worker One")
+
+    def test_distant_faces_are_ignored(self):
+        session = EntrySession("scan-distant")
+        session.add_identity([distant(), *face()], True)
+        self.assertEqual(session.phase, "EVIDENCE")
+
+    def test_one_known_face_proceeds_with_multiple_unknown_faces(self):
+        session = EntrySession("scan-unknowns")
+        session.add_identity([unknown(), *face(), unknown()], True)
+        self.assertEqual(session.phase, "EVIDENCE")
+        self.assertEqual(session.worker["employee_code"], "WORKER1")
+
+    def test_multiple_known_faces_deny_entry(self):
+        session = EntrySession("scan-multiple-known")
+        session.add_identity([*face("WORKER1"), *face("WORKER2")], True)
+        self.assertEqual(session.verdict, "DENIED")
+        self.assertIn("MULTIPLE_KNOWN_FACES", session.reasons)
 
     def test_identity_change_holds_entry(self):
         session = self.identified()

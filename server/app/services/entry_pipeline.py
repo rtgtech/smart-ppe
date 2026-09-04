@@ -33,16 +33,19 @@ class EntrySession:
     ppe_timeout: float = SETTINGS.entry_evidence_timeout_seconds
 
     def add_identity(self, faces: list[dict[str, Any]], quality: bool) -> None:
-        if len(faces) > 1:
-            sample = {"state": "MULTIPLE"}
+        faces = [face for face in faces if not face.get("ignored")]
+        known = [face for face in faces if face.get("recognized")]
+        if len(known) > 1:
+            self.finish("DENIED", ["MULTIPLE_KNOWN_FACES"])
+            return
+        if known:
+            sample = {"state": "MATCH", **{key: known[0].get(key) for key in ("person_id", "name", "similarity")}}
         elif not faces:
             sample = {"state": "NO_FACE"}
-        elif faces[0]["recognized"]:
-            sample = {"state": "MATCH", **{key: faces[0].get(key) for key in ("person_id", "name", "similarity")}}
         elif not quality:
             sample = {"state": "LOW_QUALITY"}
         else:
-            sample = {"state": "UNKNOWN", "similarity": faces[0].get("similarity")}
+            sample = {"state": "UNKNOWN", "similarity": max((face.get("similarity") or 0 for face in faces), default=0)}
         self.identity = (self.identity + [sample])[-WINDOW:]
         self.touched = time.monotonic()
         matches: dict[str, list[dict[str, Any]]] = {}

@@ -8,13 +8,12 @@ import cv2
 
 
 PPE_ITEM_SPECS = {
-    "glove": {"display_name": "Gloves", "regions": ("left_hand", "right_hand")},
-    "goggles": {"display_name": "Goggles", "regions": ("head",)},
     "helmet": {"display_name": "Helmet", "regions": ("head",)},
-    "mask": {"display_name": "Mask", "regions": ("head",)},
-    "shoes": {"display_name": "Shoes", "regions": ("left_foot", "right_foot")},
+    "vest": {"display_name": "Vest", "regions": ("torso",)},
+    "boots": {"display_name": "Boots", "regions": ("left_foot", "right_foot")},
 }
-MODEL_PPE_CLASSES = frozenset(PPE_ITEM_SPECS) | {f"no_{name}" for name in PPE_ITEM_SPECS}
+MODEL_PPE_CLASSES = frozenset(PPE_ITEM_SPECS) | {"no_helmet", "no_boots"}
+LABEL_ALIASES = {"boot": "boots"}
 
 
 def _iou(a: list[float], b: list[float]) -> float:
@@ -48,6 +47,7 @@ def _regions(box: list[float], width: int, height: int) -> tuple[dict[str, dict[
     full = h >= height * .58 and x1 > 2 and y1 > 2 and x2 < width - 2 and y2 < height - 2
     raw = {
         "head": [x1 + .12*w, y1, x2 - .12*w, y1 + .30*h],
+        "torso": [x1 + .12*w, y1 + .22*h, x2 - .12*w, y1 + .70*h],
         "left_hand": [x1 - .08*w, y1 + .25*h, x1 + .42*w, y1 + .72*h],
         "right_hand": [x1 + .58*w, y1 + .25*h, x2 + .08*w, y1 + .72*h],
         "left_foot": [x1, y1 + .70*h, x1 + .56*w, y2],
@@ -73,7 +73,7 @@ def analyze_compliance(people: list[dict[str, Any]], detections: list[dict[str, 
 
     for detection in detections:
         model_label = str(detection.get("label", "")).lower()
-        label = model_label.removeprefix("no_")
+        label = LABEL_ALIASES.get(model_label.removeprefix("no_"), model_label.removeprefix("no_"))
         if label not in PPE_ITEM_SPECS:
             continue
         options = []
