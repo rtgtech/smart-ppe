@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import Alert, AttendanceLog, ComplianceLog, Device, Gate, GateEvent, PpeDetection, PpeItem, SyncOutbox, Worker, WorkerPpe
+from app.services.ppe_compliance import PersonTracker
 from app.services.vision import MAX_FRAME_BYTES, decode_jpeg, infer_frame, vision_lock
 
 
@@ -131,7 +132,7 @@ def _decode_qr(image: np.ndarray) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def _frame_evidence(encoded: bytes, detections: list[dict[str, Any]], faces: list[dict[str, Any]]) -> dict[str, Any]:
+def _frame_evidence(encoded: bytes, persons: list[dict[str, Any]], faces: list[dict[str, Any]]) -> dict[str, Any]:
     image = decode_jpeg(encoded)
     height, width = image.shape[:2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -139,9 +140,9 @@ def _frame_evidence(encoded: bytes, detections: list[dict[str, Any]], faces: lis
     sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     quality = settings.entry_min_luminance <= luminance <= settings.entry_max_luminance and sharpness >= settings.entry_min_laplacian_variance
 
-    people = [row for row in detections if row["label"].lower() == "person"]
-    multiple = len(faces) > 1 or len(people) > 1
-    person_box = people[0]["bbox"] if len(people) == 1 else None
+    multiple = len(faces) > 1 or len(persons) > 1
+    person = persons[0] if len(persons) == 1 else None
+    person_box = person["bbox"] if person else None
     face = faces[0] if len(faces) == 1 else None
     framing = False
     if person_box and face:
@@ -166,26 +167,40 @@ def _frame_evidence(encoded: bytes, detections: list[dict[str, Any]], faces: lis
 
     visual: dict[str, dict[str, Any]] = {}
     for item_name, label in REQUIRED.items():
-        matches = []
-        if person_box and framing and quality:
-            px1, py1, px2, py2 = person_box
-            person_height = max(1, py2 - py1)
-            for row in detections:
-                if row["label"].lower() != label:
-                    continue
-                x1, y1, x2, y2 = row["bbox"]
-                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-                relative_y = (cy - py1) / person_height
-                region_ok = (label == "helmet" and relative_y <= .35) or (label == "vest" and .15 <= relative_y <= .75) or (label == "boots" and relative_y >= .62)
-                if px1 <= cx <= px2 and py1 <= cy <= py2 and region_ok:
-                    matches.append(row)
-        if matches:
-            best = max(matches, key=lambda row: row["confidence"])
-            visual[item_name] = {"state": "POSITIVE", "confidence": best["confidence"], "bbox": best["bbox"]}
-        elif framing and quality:
-            visual[item_name] = {"state": "NEGATIVE", "confidence": None, "bbox": None}
+        worn_state = person[label] if person else "UNKNOWN"
+        associations = person["associations"][label] if person else []
+        region_names = {
+            "helmet": ["head"],
+            "vest": ["torso"],
+            "boots": ["left_boot", "right_boot"],
+        }[label]
+        region_boxes = [person["rois"][name]["bbox"] for name in region_names] if person else []
+        if framing and quality and worn_state == "YES":
+            visual[item_name] = {
+                "state": "POSITIVE",
+                "confidence": person[f"{label}_confidence"],
+                "bbox": [row["bbox"] for row in associations],
+                "track_id": person["track_id"],
+                "roi": region_boxes,
+                "association_score": min(row["association_score"] for row in associations),
+                "worn_state": worn_state,
+            }
+        elif framing and quality and worn_state == "NO":
+            visual[item_name] = {
+                "state": "NEGATIVE",
+                "confidence": person[f"{label}_confidence"],
+                "bbox": None,
+                "track_id": person["track_id"],
+                "roi": region_boxes,
+                "association_score": None,
+                "worn_state": worn_state,
+            }
         else:
-            visual[item_name] = {"state": "UNKNOWN", "confidence": None, "bbox": None}
+            visual[item_name] = {
+                "state": "UNKNOWN", "confidence": None, "bbox": None,
+                "track_id": person["track_id"] if person else None,
+                "roi": region_boxes, "association_score": None, "worn_state": "UNKNOWN",
+            }
 
     return {
         "at": _now().isoformat(), "identity": identity, "multiple": multiple,
@@ -196,33 +211,57 @@ def _frame_evidence(encoded: bytes, detections: list[dict[str, Any]], faces: lis
 
 def _summarize(db: Session, event: GateEvent, state: dict[str, Any]) -> tuple[dict[str, Any], Worker | None]:
     frames = state.get("frames", [])[-WINDOW:]
-    matches: dict[str, list[float]] = {}
+    track_counts: Counter[int] = Counter()
     for frame in frames:
+        track_id = frame.get("visual", {}).get("Helmet", {}).get("track_id")
+        if track_id is not None and not frame.get("multiple"):
+            track_counts[track_id] += 1
+    candidate_track = track_counts.most_common(1)[0][0] if track_counts else None
+    tracked_frames = [
+        frame for frame in frames
+        if candidate_track is None or frame.get("visual", {}).get("Helmet", {}).get("track_id") == candidate_track
+    ]
+    matches: dict[str, list[float]] = {}
+    for frame in tracked_frames:
         identity = frame["identity"]
         if identity["state"] == "MATCH" and identity.get("person_id"):
             matches.setdefault(identity["person_id"], []).append(identity["confidence"])
     candidate = max(matches, key=lambda key: len(matches[key]), default=None)
     worker = None
-    if candidate and len(matches[candidate]) >= CONFIRM and not any(frame["multiple"] for frame in frames):
+    if candidate and len(matches[candidate]) >= CONFIRM and not any(frame["multiple"] for frame in tracked_frames):
         worker = db.query(Worker).filter(Worker.employee_code.ilike(candidate), Worker.status == "ACTIVE").one_or_none()
 
-    framing_count = sum(frame["framing_valid"] and frame["quality_valid"] for frame in frames)
+    framing_count = sum(frame["framing_valid"] and frame["quality_valid"] for frame in tracked_frames)
     visual: dict[str, Any] = {}
     visual_confidences: list[float] = []
     for item in REQUIRED:
-        positives = [frame["visual"][item] for frame in frames if frame["visual"][item]["state"] == "POSITIVE"]
-        negatives = sum(frame["visual"][item]["state"] == "NEGATIVE" for frame in frames)
+        positives = [frame["visual"][item] for frame in tracked_frames if frame["visual"][item]["state"] == "POSITIVE"]
+        negatives = sum(frame["visual"][item]["state"] == "NEGATIVE" for frame in tracked_frames)
         status = "CONFIRMED" if len(positives) >= CONFIRM else "MISSING" if negatives >= CONFIRM else "UNSTABLE"
         confidence = statistics.median([row["confidence"] for row in positives]) if positives else None
+        representative = max(positives, key=lambda row: row["confidence"]) if positives else next(
+            (frame["visual"][item] for frame in reversed(tracked_frames) if frame["visual"][item]["state"] == "NEGATIVE"),
+            {},
+        )
         if status == "CONFIRMED" and confidence is not None:
             visual_confidences.append(confidence)
-        visual[item] = {"state": status, "positive_frames": len(positives), "negative_frames": negatives, "confidence": confidence}
+        visual[item] = {
+            "state": status,
+            "positive_frames": len(positives),
+            "negative_frames": negatives,
+            "confidence": confidence,
+            "bbox": representative.get("bbox"),
+            "track_id": representative.get("track_id"),
+            "roi": representative.get("roi"),
+            "association_score": representative.get("association_score"),
+            "worn_state": "YES" if status == "CONFIRMED" else "NO" if status == "MISSING" else "UNKNOWN",
+        }
 
     identity_confidence = statistics.median(matches.get(candidate, [])) * 100 if worker else None
     summary = {
         "identity": {"state": "CONFIRMED" if worker else "UNSTABLE", "supporting_frames": len(matches.get(candidate, [])), "confidence": identity_confidence},
         "framing": {"state": "CONFIRMED" if framing_count >= CONFIRM else "UNSTABLE", "supporting_frames": framing_count},
-        "visual": visual, "frames_in_window": len(frames),
+        "visual": visual, "frames_in_window": len(frames), "track_id": candidate_track,
     }
     state["summary"] = summary
     event.identity_confidence = round(identity_confidence, 1) if identity_confidence is not None else None
@@ -275,8 +314,15 @@ def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None
                 ppe_id=item.ppe_id,
                 detected=visual["state"] == "CONFIRMED",
                 confidence_score=(visual["confidence"] or 0) * 100 if visual["confidence"] is not None else None,
+                bounding_box=_dump({
+                    "detection": visual.get("bbox"),
+                    "roi": visual.get("roi"),
+                    "track_id": visual.get("track_id"),
+                    "association_score": visual.get("association_score"),
+                }),
                 detection_source="AI",
-                evidence_state=visual["state"]
+                evidence_state=visual["state"],
+                assignment_result=visual.get("worn_state"),
             ))
         if verdict == "ALLOWED":
             db.add(AttendanceLog(event_id=event.event_id, worker_id=worker.worker_id, gate_id=event.gate_id, entry_time=event.edge_timestamp, status="INSIDE"))
@@ -303,15 +349,63 @@ def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
     if event.lifecycle == "FINALIZED":
         return True
     state = _load(event.evidence_json, {"frames": []})
-    summary, worker = _summarize(db, event, state)
+    summary, observed_worker = _summarize(db, event, state)
     now = _now()
     if state.get("subject_started_at") and not state.get("identity_deadline"):
         state["identity_deadline"] = (_aware(datetime.fromisoformat(state["subject_started_at"])) + timedelta(seconds=settings.entry_identity_timeout_seconds)).isoformat()
-    if worker:
-        event.worker_id = worker.worker_id
+
+    # The live workflow is intentionally sequential. Once identity is stable,
+    # lock the worker and track, discard pre-identity PPE observations, and let
+    # the client advance to /entry/compliance for a fresh evidence window.
+    if event.phase == "IDENTITY" and observed_worker and not force:
+        event.worker_id = observed_worker.worker_id
+        event.phase = "EVIDENCE"
+        state["locked_identity"] = summary["identity"]
+        state["locked_track_id"] = summary.get("track_id")
+        state["evidence_started_at"] = now.isoformat()
+        state["evidence_deadline"] = (now + timedelta(seconds=settings.entry_evidence_timeout_seconds)).isoformat()
+        state["frames"] = []
+        summary = {
+            "identity": {**summary["identity"], "continuity_state": "PENDING"},
+            "framing": {"state": "UNSTABLE", "supporting_frames": 0},
+            "visual": {
+                name: {
+                    "state": "UNSTABLE", "positive_frames": 0, "negative_frames": 0,
+                    "confidence": None, "bbox": None, "track_id": state["locked_track_id"],
+                    "roi": None, "association_score": None, "worn_state": "UNKNOWN",
+                }
+                for name in REQUIRED
+            },
+            "frames_in_window": 0,
+            "track_id": state["locked_track_id"],
+        }
+        state["summary"] = summary
+        event.ppe_confidence = 0
+        event.evidence_confidence = 0
+        event.evidence_json = _dump(state)
+        return False
+
+    locked_worker = db.get(Worker, event.worker_id) if event.phase == "EVIDENCE" and event.worker_id else None
+    identity_changed = bool(locked_worker and observed_worker and observed_worker.worker_id != locked_worker.worker_id)
+    worker = observed_worker
+    if event.phase == "EVIDENCE":
+        continuity_confirmed = bool(locked_worker and observed_worker and observed_worker.worker_id == locked_worker.worker_id)
+        locked_identity = state.get("locked_identity") or summary["identity"]
+        summary["identity"] = {
+            **locked_identity,
+            "continuity_state": "CONFIRMED" if continuity_confirmed else "CHANGED" if identity_changed else "PENDING",
+        }
+        event.identity_confidence = locked_identity.get("confidence")
+        state["summary"] = summary
+        worker = locked_worker if continuity_confirmed else None
+    elif observed_worker:
+        event.worker_id = observed_worker.worker_id
 
     reasons: list[str] = []
     framing_ok = summary["framing"]["state"] == "CONFIRMED"
+    if identity_changed:
+        _finalize(db, event, "HOLD", locked_worker, ["IDENTITY_CHANGED"], summary, state)
+        return True
     if worker and framing_ok:
         for name, value in summary["visual"].items():
             if value["state"] == "MISSING":
@@ -323,8 +417,9 @@ def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
             _finalize(db, event, "ALLOWED", worker, [], summary, state)
             return True
 
-    identity_deadline = datetime.fromisoformat(state["identity_deadline"]) if state.get("identity_deadline") else None
-    expired = identity_deadline is not None and now >= _aware(identity_deadline)
+    deadline_key = "evidence_deadline" if event.phase == "EVIDENCE" else "identity_deadline"
+    deadline = datetime.fromisoformat(state[deadline_key]) if state.get(deadline_key) else None
+    expired = deadline is not None and now >= _aware(deadline)
     if not expired and not force:
         event.evidence_json = _dump(state)
         return False
@@ -337,7 +432,7 @@ def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
             reasons.append("UNKNOWN_FACE")
         else:
             reasons.append("UNSTABLE_IDENTITY")
-        previously_confirmed = db.get(Worker, event.worker_id) if event.worker_id else None
+        previously_confirmed = locked_worker or (db.get(Worker, event.worker_id) if event.worker_id else None)
         _finalize(db, event, "HOLD", previously_confirmed, reasons, summary, state)
         return True
     if not framing_ok:
@@ -410,6 +505,7 @@ async def finalize_attempt(event_id: str):
 @router.websocket("/attempts/{event_id}/stream")
 async def entry_stream(websocket: WebSocket, event_id: str) -> None:
     await websocket.accept()
+    tracker = PersonTracker()
     db = SessionLocal()
     try:
         event = db.get(GateEvent, event_id)
@@ -432,8 +528,10 @@ async def entry_stream(websocket: WebSocket, event_id: str) -> None:
                 continue
             async with _event_locks.setdefault(event_id, asyncio.Lock()):
                 async with vision_lock:
-                    output, detections, yolo_ms, faces, face_ms, face_error, _ = await asyncio.to_thread(infer_frame, frame, .5)
-                    evidence = await asyncio.to_thread(_frame_evidence, frame, detections, faces)
+                    output, detections, yolo_ms, faces, face_ms, face_error, _, persons, pose_ms = await asyncio.to_thread(
+                        infer_frame, frame, .5, tracker
+                    )
+                    evidence = await asyncio.to_thread(_frame_evidence, frame, persons, faces)
                 db = SessionLocal()
                 try:
                     event = db.get(GateEvent, event_id)
@@ -444,13 +542,17 @@ async def entry_stream(websocket: WebSocket, event_id: str) -> None:
                         state = _load(event.evidence_json, {"frames": []})
                         state.setdefault("frames", []).append(evidence)
                         state["frames"] = state["frames"][-WINDOW:]
-                        if not state.get("subject_started_at") and (evidence["identity"]["state"] != "NONE" or any(d["label"].lower() == "person" for d in detections)):
+                        if not state.get("subject_started_at") and (evidence["identity"]["state"] != "NONE" or persons):
                             state["subject_started_at"] = evidence["at"]
                         event.evidence_json = _dump(state)
                         _evaluate(db, event)
                         db.commit()
                         db.refresh(event)
-                    metadata = {"type": "frame_meta", "entry": _event_dict(event), "detections": detections, "faces": faces, "inference_ms": round(yolo_ms, 1), "face_inference_ms": round(face_ms, 1)}
+                    metadata = {
+                        "type": "frame_meta", "entry": _event_dict(event), "detections": detections,
+                        "persons": persons, "faces": faces, "inference_ms": round(yolo_ms, 1),
+                        "pose_inference_ms": round(pose_ms, 1), "face_inference_ms": round(face_ms, 1),
+                    }
                     if face_error:
                         metadata["face_error"] = face_error
                 except Exception:
@@ -532,7 +634,21 @@ def ingest_synced_event(payload: dict[str, Any], authorization: str | None = Hea
         for item in db.query(PpeItem).filter(PpeItem.name.in_(REQUIRED)).all():
             visual = evidence.get("visual", {}).get(item.name, {})
             qr = evidence.get("qr", {}).get(item.name, {})
-            db.add(PpeDetection(log_id=log.log_id, ppe_id=item.ppe_id, detected=visual.get("state") == "CONFIRMED", confidence_score=(visual.get("confidence") or 0) * 100 if visual.get("confidence") is not None else None, detection_source="AI", evidence_state=visual.get("state")))
+            db.add(PpeDetection(
+                log_id=log.log_id,
+                ppe_id=item.ppe_id,
+                detected=visual.get("state") == "CONFIRMED",
+                confidence_score=(visual.get("confidence") or 0) * 100 if visual.get("confidence") is not None else None,
+                bounding_box=_dump({
+                    "detection": visual.get("bbox"),
+                    "roi": visual.get("roi"),
+                    "track_id": visual.get("track_id"),
+                    "association_score": visual.get("association_score"),
+                }),
+                detection_source="AI",
+                evidence_state=visual.get("state"),
+                assignment_result=visual.get("worn_state"),
+            ))
             db.add(PpeDetection(log_id=log.log_id, ppe_id=item.ppe_id, detected=qr.get("state") == "CONFIRMED", confidence_score=min(100, qr.get("max_frames", 0) * 100 / CONFIRM), detection_source="QR", evidence_state=qr.get("state"), observed_identifier=qr.get("identifier"), assignment_result=qr.get("assignment_result")))
         if verdict == "ALLOWED":
             db.add(AttendanceLog(event_id=event_id, worker_id=worker.worker_id, gate_id=gate.gate_id, entry_time=event.edge_timestamp, status="INSIDE"))

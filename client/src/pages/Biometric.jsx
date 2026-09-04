@@ -1,17 +1,10 @@
-import { Check, HardHat, ScanFace, ShieldAlert, ShieldCheck, Shirt, Footprints, UserRoundCheck } from 'lucide-react';
+import { ScanFace, ShieldCheck, UserRoundCheck } from 'lucide-react';
 import { useEntry } from '../components/entry-context';
-
-const ITEMS = [
-  { name: 'Helmet', icon: HardHat },
-  { name: 'Vest', icon: Shirt },
-  { name: 'Boots', icon: Footprints },
-];
 
 export default function Biometric() {
   const { entry, connection, error, start } = useEntry();
   const identity = entry?.evidence?.identity;
   const confirmed = identity?.state === 'CONFIRMED';
-  const evidence = entry?.evidence || {};
 
   return (
     <aside className="panel flex flex-col p-5 sm:p-6">
@@ -29,39 +22,9 @@ export default function Biometric() {
         {identity?.confidence != null && <div className="mt-1.5 text-xs text-safety font-medium">Identity Match {identity.confidence.toFixed(1)}%</div>}
       </div>
 
-      {/* Real-time Visual PPE Status */}
-      <div className="mb-5 space-y-2">
-        <div className="label-op text-[0.62rem]">Mandatory PPE Detection</div>
-        <div className="grid grid-cols-3 gap-2">
-          {ITEMS.map(({ name, icon: Icon }) => {
-            const visual = evidence.visual?.[name];
-            const isDone = visual?.state === 'CONFIRMED';
-            const isMissing = visual?.state === 'MISSING';
-            return (
-              <div
-                key={name}
-                className={`rounded-lg border p-2.5 text-center flex flex-col items-center justify-center transition-all ${
-                  isDone
-                    ? 'border-safety/50 bg-safetySubtle text-safety'
-                    : isMissing
-                    ? 'border-danger/40 bg-dangerSubtle text-danger'
-                    : 'border-border bg-input text-textMuted'
-                }`}
-              >
-                <Icon size={18} className="mb-1" />
-                <span className="text-xs font-bold">{name}</span>
-                <span className="text-[0.6rem] uppercase tracking-wider mt-0.5 font-mono">
-                  {isDone ? 'Detected' : isMissing ? 'Missing' : 'Scanning'}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
       <div className="mt-auto space-y-3">
         <div className="rounded-md border border-border bg-input p-3 text-xs leading-relaxed text-textSecondary">
-          Keep full body in frame with Helmet, Vest, and Boots visible. The system evaluates identity and PPE compliance simultaneously to issue the verdict directly.
+          Face the camera and remain still. After your identity is confirmed, the next step will verify that your PPE is correctly worn.
         </div>
         {error && <div className="rounded-md border border-dangerBorder bg-dangerSubtle p-3 text-xs text-danger">{error}</div>}
         {!entry && (

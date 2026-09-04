@@ -121,6 +121,11 @@ http://localhost:5173/#/entry/biometric
 Select **Start Verification** and allow camera permission. Raw camera video is
 not displayed; the page renders only frames annotated by the server.
 
+The entry workflow first confirms the worker's face on `/entry/biometric`.
+After identity is locked, the same camera and tracking session advances to
+`/entry/compliance`, where fresh frames verify Helmet, Vest, and both Boots in
+their expected anatomical regions before issuing the gate verdict.
+
 ## Configuration
 
 The following optional environment variables can be set before starting the
@@ -129,8 +134,11 @@ server:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `YOLO_MODEL_PATH` | `best.pt` in the repository root | PPE model path |
+| `YOLO_POSE_MODEL` | `yolo11n-pose.pt` | Pose checkpoint path or Ultralytics model name; a model name downloads on first run |
 | `YOLO_DEVICE` | Automatic | Inference device, such as `cpu` or `0` for the first CUDA GPU |
 | `YOLO_IMAGE_SIZE` | `640` | YOLO inference image size |
+| `YOLO_POSE_CONFIDENCE` | `0.35` | Minimum pose/keypoint confidence used for anatomical ROIs |
+| `PPE_REGION_OVERLAP` | `0.50` | Minimum PPE-box coverage inside its expected body region |
 | `MAX_FRAME_BYTES` | `5000000` | Maximum uploaded or streamed JPEG size |
 | `FACE_DETECTOR_PATH` | YuNet model under `stream_test/server/models` | Face detector path |
 | `FACE_RECOGNIZER_PATH` | SFace model under `stream_test/server/models` | Face recognizer path |
@@ -164,6 +172,12 @@ client is served over HTTPS.
 - `POST /api/v1/entry/attempts` - create or resume an idempotent entry attempt
 - `WS /api/v1/entry/attempts/{event_id}/stream` - integrated face, PPE, and QR pipeline
 - `POST /api/v1/entry/sync/events` - idempotent central synchronization receiver
+
+Each WebSocket `frame_meta` message includes a `persons` array with stable
+`track_id`, Helmet/Vest/Boots `YES`/`NO`/`UNKNOWN` states and confidences,
+an overall `COMPLIANT`/`VIOLATION`/`UNKNOWN` status, anatomical ROIs, and the
+PPE detections associated with that person. Existing entry, detection, face,
+and inference-timing fields remain available.
 
 ## Build and validation
 
@@ -205,6 +219,10 @@ cd D:\smart-ppe\server
 
 Verify all three model paths listed under **Required model files**, or override
 their locations using the corresponding environment variables.
+
+The pose checkpoint defaults to `yolo11n-pose.pt` and is downloaded by
+Ultralytics on first startup. For an offline edge installation, download the
+checkpoint during provisioning and set `YOLO_POSE_MODEL` to its local path.
 
 ### A known person is shown as Unknown
 

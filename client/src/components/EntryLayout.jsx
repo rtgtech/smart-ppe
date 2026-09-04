@@ -20,7 +20,7 @@ export default function EntryLayout() {
 
   const routeFor = useCallback((next) => {
     if (!next) return;
-    if (next.lifecycle === 'FINALIZED') navigate('/entry/compliance', { replace: true });
+    if (next.lifecycle === 'FINALIZED' || next.phase === 'EVIDENCE') navigate('/entry/compliance', { replace: true });
     else navigate('/entry/biometric', { replace: true });
   }, [navigate]);
 

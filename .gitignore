@@ -30,6 +30,7 @@ dist/
 runs/
 Ultralytics/
 .ultralytics/
+yolo*-pose.pt
 
 # Logs and temporary files
 *.log

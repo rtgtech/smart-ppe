@@ -13,6 +13,7 @@ import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from ultralytics import YOLO
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models import SafetyScore, Worker
 from app.services.face_recognition import (
@@ -22,6 +23,7 @@ from app.services.face_recognition import (
     annotate_faces,
     validate_person_id,
 )
+from app.services.ppe_compliance import PersonTracker, analyze_compliance, annotate_compliance
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -30,6 +32,7 @@ STREAM_SERVER_DIR = REPOSITORY_ROOT / "stream_test" / "server"
 MODEL_PATH = Path(
     os.getenv("YOLO_MODEL_PATH", str(REPOSITORY_ROOT / "best.pt"))
 ).expanduser().resolve()
+POSE_MODEL_SPEC = os.getenv("YOLO_POSE_MODEL", "yolo11n-pose.pt").strip() or "yolo11n-pose.pt"
 FACE_DETECTOR_PATH = Path(
     os.getenv(
         "FACE_DETECTOR_PATH",
@@ -50,51 +53,61 @@ DEVICE = os.getenv("YOLO_DEVICE", "").strip() or None
 IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "640"))
 MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", "5000000"))
 FACE_SIMILARITY_THRESHOLD = float(os.getenv("FACE_SIMILARITY_THRESHOLD", "0.363"))
+POSE_CONFIDENCE = float(os.getenv("YOLO_POSE_CONFIDENCE", "0.35"))
+PPE_REGION_OVERLAP = float(os.getenv("PPE_REGION_OVERLAP", "0.50"))
+settings = get_settings()
 
 router = APIRouter(tags=["vision"])
 vision_lock = asyncio.Lock()
 yolo_model: YOLO | None = None
+pose_model: YOLO | None = None
 face_engine: FaceEngine | None = None
 face_registry: FaceRegistry | None = None
 
 
-def _load_services() -> tuple[YOLO, FaceEngine, FaceRegistry]:
+def _load_services() -> tuple[YOLO, YOLO, FaceEngine, FaceRegistry]:
     if not MODEL_PATH.is_file():
         raise FileNotFoundError(
             f"YOLO weights not found at '{MODEL_PATH}'. Set YOLO_MODEL_PATH to a local .pt file."
         )
     model = YOLO(str(MODEL_PATH))
     available = {str(name).lower() for name in model.names.values()}
-    required = {"person", "helmet", "vest", "boots"}
+    required = {"helmet", "vest", "boots"}
     missing = sorted(required - available)
     if missing:
         raise RuntimeError(f"The YOLO model is missing required gate classes: {', '.join(missing)}")
+    pose = YOLO(POSE_MODEL_SPEC)
+    if pose.task != "pose":
+        raise RuntimeError(f"The configured pose model '{POSE_MODEL_SPEC}' is not a YOLO pose checkpoint.")
     engine = FaceEngine(
         detector_path=FACE_DETECTOR_PATH,
         recognizer_path=FACE_RECOGNIZER_PATH,
         similarity_threshold=FACE_SIMILARITY_THRESHOLD,
     )
     registry = FaceRegistry(FACE_REGISTRY_PATH)
-    return model, engine, registry
+    return model, pose, engine, registry
 
 
 async def start_vision_services() -> None:
     """Load all vision models once without blocking FastAPI's event loop."""
-    global yolo_model, face_engine, face_registry
-    yolo_model, face_engine, face_registry = await asyncio.to_thread(_load_services)
+    global yolo_model, pose_model, face_engine, face_registry
+    yolo_model, pose_model, face_engine, face_registry = await asyncio.to_thread(_load_services)
 
 
 def stop_vision_services() -> None:
-    global yolo_model, face_engine, face_registry
+    global yolo_model, pose_model, face_engine, face_registry
     yolo_model = None
+    pose_model = None
     face_engine = None
     face_registry = None
 
 
 def health_snapshot() -> dict[str, Any]:
     return {
-        "status": "ok" if yolo_model is not None and face_engine is not None else "loading",
+        "status": "ok" if yolo_model is not None and pose_model is not None and face_engine is not None else "loading",
         "model": MODEL_PATH.name,
+        "ppe_model": MODEL_PATH.name,
+        "pose_model": Path(POSE_MODEL_SPEC).name,
         "device": DEVICE or "auto",
         "face_detector": FACE_DETECTOR_PATH.name,
         "face_recognizer": FACE_RECOGNIZER_PATH.name,
@@ -245,7 +258,7 @@ def lookup_worker_details(person_id: str | None) -> dict[str, Any] | None:
 
 
 def infer_frame(
-    encoded_frame: bytes, confidence: float
+    encoded_frame: bytes, confidence: float, tracker: PersonTracker | None = None
 ) -> tuple[
     bytes,
     list[dict[str, Any]],
@@ -254,9 +267,11 @@ def infer_frame(
     float,
     str | None,
     dict[str, Any],
+    list[dict[str, Any]],
+    float,
 ]:
-    """Run PPE detection and face recognition for one JPEG frame."""
-    if yolo_model is None or face_engine is None or face_registry is None:
+    """Run pose-guided PPE detection and face recognition for one JPEG frame."""
+    if yolo_model is None or pose_model is None or face_engine is None or face_registry is None:
         raise RuntimeError("The vision models are not loaded.")
 
     image = decode_jpeg(encoded_frame)
@@ -274,7 +289,6 @@ def infer_frame(
     result = results[0]
 
     detections: list[dict[str, Any]] = []
-    detected_classes: set[str] = set()
     conf_scores: list[float] = []
 
     if result.boxes is not None:
@@ -294,16 +308,51 @@ def infer_frame(
                     "bbox": [x1, y1, x2, y2],
                 }
             )
-            detected_classes.add(label.lower())
             conf_scores.append(confidence_score)
 
     detection_count = len(detections)
     annotated = result.plot()
 
-    # Calculate PPE presence from YOLO classes.
-    has_helmet = "helmet" in detected_classes and "no_helmet" not in detected_classes
-    has_boots = "boots" in detected_classes and "no_boots" not in detected_classes
-    has_vest = "vest" in detected_classes
+    # Pose inference provides the anatomical regions used to validate worn PPE.
+    pose_started = time.perf_counter()
+    pose_results = pose_model.predict(
+        source=image,
+        conf=POSE_CONFIDENCE,
+        imgsz=IMAGE_SIZE,
+        device=DEVICE,
+        verbose=False,
+    )
+    pose_ms = (time.perf_counter() - pose_started) * 1000
+    pose_result = pose_results[0]
+    people: list[dict[str, Any]] = []
+    if pose_result.boxes is not None and pose_result.keypoints is not None:
+        keypoint_data = pose_result.keypoints.data.cpu().tolist()
+        for index, box in enumerate(pose_result.boxes):
+            x1, y1, x2, y2 = (round(float(value), 1) for value in box.xyxy[0].tolist())
+            people.append(
+                {
+                    "bbox": [x1, y1, x2, y2],
+                    "confidence": round(float(box.conf[0].item()), 4),
+                    "keypoints": keypoint_data[index],
+                }
+            )
+
+    person_results = analyze_compliance(
+        people,
+        detections,
+        tracker or PersonTracker(),
+        image.shape,
+        keypoint_threshold=POSE_CONFIDENCE,
+        overlap_threshold=PPE_REGION_OVERLAP,
+        min_height_ratio=settings.entry_person_min_height_ratio,
+        frame_margin_ratio=settings.entry_frame_margin_ratio,
+    )
+    annotated = annotate_compliance(annotated, person_results, detections)
+
+    primary_compliance = person_results[0] if len(person_results) == 1 else None
+    has_helmet = bool(primary_compliance and primary_compliance["helmet"] == "YES")
+    has_boots = bool(primary_compliance and primary_compliance["boots"] == "YES")
+    has_vest = bool(primary_compliance and primary_compliance["vest"] == "YES")
 
     ppe_status = {
         "helmet": has_helmet,
@@ -312,11 +361,11 @@ def infer_frame(
     }
 
     missing_items: list[str] = []
-    if not has_helmet:
+    if primary_compliance and primary_compliance["helmet"] == "NO":
         missing_items.append("Helmet")
-    if not has_boots:
+    if primary_compliance and primary_compliance["boots"] == "NO":
         missing_items.append("Boots")
-    if not has_vest:
+    if primary_compliance and primary_compliance["vest"] == "NO":
         missing_items.append("Vest")
 
     # Face recognition runs on the original image while annotation is layered
@@ -400,10 +449,12 @@ def infer_frame(
     else:
         ai_confidence = 0.0
 
-    if not faces and detection_count == 0:
+    if not faces and not person_results and detection_count == 0:
         decision = "IDLE"
-    elif not missing_items and primary_recognized:
+    elif primary_compliance and primary_compliance["status"] == "COMPLIANT" and primary_recognized:
         decision = "ENTRY ALLOWED"
+    elif primary_compliance and primary_compliance["status"] == "UNKNOWN":
+        decision = "ANALYZING"
     else:
         decision = "ENTRY DENIED"
 
@@ -429,4 +480,6 @@ def infer_frame(
         face_ms,
         face_error,
         live_summary,
+        person_results,
+        pose_ms,
     )
