@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutGrid, Radio, Users, HardHat, ClipboardCheck,
-  AlertTriangle, FileText, BrainCircuit, Cpu, ScrollText,
+  AlertTriangle, FileText, Cpu,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -13,9 +13,7 @@ const NAV_ITEMS = [
   { key: 'ATTENDANCE', path: '/attendance', icon: ClipboardCheck },
   { key: 'ALERTS', path: '/alerts', icon: AlertTriangle },
   { key: 'REPORTS', path: '/reports', icon: FileText },
-  { key: 'INSIGHTS', path: '/insights', icon: BrainCircuit },
   { key: 'DEVICES', path: '/devices', icon: Cpu },
-  { key: 'AUDIT', path: '/audit', icon: ScrollText },
 ];
 
 const VIEW_W = 1440;

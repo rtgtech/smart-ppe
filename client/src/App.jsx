@@ -12,10 +12,8 @@ import WorkerProfile from './pages/WorkerProfile';
 import Attendance from './pages/Attendance';
 import Alerts from './pages/Alerts';
 import Reports from './pages/Reports';
-import Insights from './pages/Insights';
 import Devices from './pages/Devices';
 import DevicesSync from './pages/DevicesSync';
-import Audit from './pages/Audit';
 import Champions from './pages/Champions';
 import Settings from './pages/Settings';
 import SettingsPpe from './pages/SettingsPpe';
@@ -53,10 +51,8 @@ export default function App() {
         <Route path="/attendance" element={Shelled(Attendance)} />
         <Route path="/alerts" element={Shelled(Alerts)} />
         <Route path="/reports" element={Shelled(Reports)} />
-        <Route path="/insights" element={Shelled(Insights)} />
         <Route path="/devices" element={Shelled(Devices)} />
         <Route path="/devices/sync" element={Shelled(DevicesSync)} />
-        <Route path="/audit" element={Shelled(Audit)} />
         <Route path="/champions" element={Shelled(Champions)} />
         <Route path="/settings" element={Shelled(Settings)} />
         <Route path="/settings/ppe" element={Shelled(SettingsPpe)} />
