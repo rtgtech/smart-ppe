@@ -4,7 +4,7 @@ from datetime import date, datetime
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
-from app.models import Base, Department, Device, Gate, Mine, PpeDetection, PpeItem, SafetyScore, SeedState, Worker, WorkerPpe
+from app.models import Base, Department, Device, Gate, Mine, PpeItem, SafetyScore, SeedState, Worker, WorkerPpe
 from app.db.session import engine
 from app.db.seed_ppe_data import PPE_CATALOG, seed_ppe_demo_data
 
@@ -182,7 +182,7 @@ def migrate_entry_schema() -> None:
                     if isinstance(expiry_date, str):
                         expiry_date = date.fromisoformat(expiry_date)
                     connection.execute(WorkerPpe.__table__.insert().values(
-                        worker_ppe_id=str(uuid.uuid4()), legacy_worker_ppe_id=row["worker_ppe_id"],
+                        worker_ppe_id=str(uuid.uuid4()),
                         worker_id=row["worker_id"], ppe_id=row["ppe_id"], rfid_tag=row["rfid_tag"],
                         serial_number=row["serial_number"], issued_at=issued_at,
                         expiry_date=expiry_date, status=row["status"],
@@ -191,23 +191,37 @@ def migrate_entry_schema() -> None:
                 connection.commit()
                 connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
-    inspector = inspect(engine)
-    if inspector.has_table("ppe_detections") and "evidence_state" not in {c["name"] for c in inspector.get_columns("ppe_detections")}:
-        with engine.connect() as connection:
-            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-            connection.exec_driver_sql("ALTER TABLE ppe_detections RENAME TO ppe_detections_legacy")
-            for index in ("ix_ppe_detections_log_id", "ix_ppe_detections_ppe_id"):
-                connection.exec_driver_sql(f"DROP INDEX IF EXISTS {index}")
-            PpeDetection.__table__.create(bind=connection)
-            connection.exec_driver_sql(
-                "INSERT INTO ppe_detections (detection_id, log_id, ppe_id, detected, confidence_score, bounding_box, detection_source, created_at) "
-                "SELECT detection_id, log_id, ppe_id, detected, confidence_score, bounding_box, detection_source, created_at FROM ppe_detections_legacy"
-            )
-            connection.exec_driver_sql("DROP TABLE ppe_detections_legacy")
-            connection.commit()
-            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-
     _migrate_ppe_items()
+
+    dead_columns = {
+        "ppe_detections": (
+            "bounding_box",
+            "evidence_state",
+            "observed_identifier",
+            "assignment_result",
+        ),
+        "gate_events": (
+            "phase",
+            "received_at",
+            "identity_confidence",
+            "ppe_confidence",
+            "evidence_source",
+            "interventions_json",
+            "payload_hash",
+        ),
+    }
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE IF EXISTS sync_outbox")
+        for table_name, column_names in dead_columns.items():
+            current_inspector = inspect(connection)
+            if not current_inspector.has_table(table_name):
+                continue
+            existing = {column["name"] for column in current_inspector.get_columns(table_name)}
+            for column_name in column_names:
+                if column_name in existing:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} DROP COLUMN {column_name}"
+                    )
 
     additions = {
         "compliance_logs": [
@@ -242,15 +256,49 @@ def migrate_entry_schema() -> None:
 
 
 def migrate_worker_schema() -> None:
-    """Remove the retired worker email field from existing databases."""
+    """Remove retired worker, assignment, compliance, and notification fields."""
     inspector = inspect(engine)
-    if not inspector.has_table("workers"):
-        return
 
-    worker_columns = {column["name"] for column in inspector.get_columns("workers")}
-    if "email" in worker_columns:
+    if inspector.has_table("notifications"):
         with engine.begin() as connection:
-            connection.exec_driver_sql("ALTER TABLE workers DROP COLUMN email")
+            connection.exec_driver_sql("DROP TABLE notifications")
+
+    if inspector.has_table("workers"):
+        worker_columns = {column["name"] for column in inspector.get_columns("workers")}
+        with engine.begin() as connection:
+            connection.exec_driver_sql("DROP INDEX IF EXISTS ix_workers_rfid_uid")
+            for column_name in ("email", "photo_url", "designation", "rfid_uid"):
+                if column_name in worker_columns:
+                    connection.exec_driver_sql(f"ALTER TABLE workers DROP COLUMN {column_name}")
+
+    if inspector.has_table("worker_ppe"):
+        assignment_columns = {column["name"] for column in inspector.get_columns("worker_ppe")}
+        if "legacy_worker_ppe_id" in assignment_columns:
+            if engine.url.drivername.startswith("sqlite"):
+                with engine.connect() as connection:
+                    connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+                    connection.commit()
+                    connection.exec_driver_sql("ALTER TABLE worker_ppe RENAME TO worker_ppe_legacy")
+                    for index in ("ix_worker_ppe_worker_id", "ix_worker_ppe_ppe_id"):
+                        connection.exec_driver_sql(f"DROP INDEX IF EXISTS {index}")
+                    WorkerPpe.__table__.create(bind=connection)
+                    connection.exec_driver_sql(
+                        "INSERT INTO worker_ppe (worker_ppe_id, worker_id, ppe_id, rfid_tag, serial_number, issued_at, expiry_date, status) "
+                        "SELECT worker_ppe_id, worker_id, ppe_id, rfid_tag, serial_number, issued_at, expiry_date, status FROM worker_ppe_legacy"
+                    )
+                    connection.exec_driver_sql("DROP TABLE worker_ppe_legacy")
+                    connection.commit()
+                    connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            else:
+                with engine.begin() as connection:
+                    connection.exec_driver_sql("ALTER TABLE worker_ppe DROP COLUMN legacy_worker_ppe_id")
+
+    if inspector.has_table("compliance_logs"):
+        compliance_columns = {column["name"] for column in inspector.get_columns("compliance_logs")}
+        with engine.begin() as connection:
+            for column_name in ("exit_time", "latitude", "longitude"):
+                if column_name in compliance_columns:
+                    connection.exec_driver_sql(f"ALTER TABLE compliance_logs DROP COLUMN {column_name}")
 
 
 def seed_initial_data(db: Session) -> None:

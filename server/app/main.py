@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes import entry, operations, workers
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.db.init_db import init_db
 from app.services.vision import (
     health_snapshot,
@@ -12,6 +13,10 @@ from app.services.vision import (
     start_vision_services,
     stop_vision_services,
 )
+
+
+# Configure logging before application startup.
+configure_logging()
 
 settings = get_settings()
 
@@ -29,8 +34,10 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup() -> None:
     init_db()
+
     if settings.deployment_role != "central":
         await start_vision_services()
+
     await entry.start_entry_services()
 
 
@@ -42,10 +49,30 @@ async def on_shutdown() -> None:
 
 @app.get("/health")
 def health_check() -> dict[str, Any]:
-    return {"status": "ok", "role": settings.deployment_role, "vision": health_snapshot() if settings.deployment_role != "central" else {"status": "disabled"}}
+    return {
+        "status": "ok",
+        "role": settings.deployment_role,
+        "vision": (
+            health_snapshot()
+            if settings.deployment_role != "central"
+            else {"status": "disabled"}
+        ),
+    }
 
 
-app.include_router(workers.router, prefix=settings.api_v1_prefix)
-app.include_router(operations.router, prefix=settings.api_v1_prefix)
-app.include_router(entry.router, prefix=settings.api_v1_prefix)
+app.include_router(
+    workers.router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    operations.router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    entry.router,
+    prefix=settings.api_v1_prefix,
+)
+
 app.include_router(vision_router)

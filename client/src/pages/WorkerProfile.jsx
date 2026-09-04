@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
-import { AlertOctagon, ArrowLeft } from 'lucide-react';
+import { AlertOctagon, ArrowLeft, Download, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Badge, StatCard } from '../components/ui';
 import { getWorker } from '../services/workers';
 import { listCompliance } from '../services/compliance';
+import { downloadEmployeeReportPdf } from '../services/reports';
 
 export default function WorkerProfile() {
   const { id } = useParams();
@@ -12,6 +13,25 @@ export default function WorkerProfile() {
   const [worker, setWorker] = useState(null);
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
+  const [downloadingPeriod, setDownloadingPeriod] = useState(null); // 'WEEKLY' | 'MONTHLY' | null
+  const [pdfStatus, setPdfStatus] = useState({ type: '', msg: '' });
+
+  const handleDownloadPdf = async (periodType) => {
+    if (!worker) return;
+    setDownloadingPeriod(periodType);
+    setPdfStatus({ type: '', msg: '' });
+    try {
+      const filename = await downloadEmployeeReportPdf({
+        workerId: worker.worker_id || worker.id,
+        period: periodType,
+      });
+      setPdfStatus({ type: 'success', msg: `Downloaded ${filename}` });
+    } catch (err) {
+      setPdfStatus({ type: 'error', msg: err.message || 'Download failed' });
+    } finally {
+      setDownloadingPeriod(null);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -115,13 +135,43 @@ export default function WorkerProfile() {
           </div>
           <p className="text-xs text-textSecondary leading-relaxed mb-4">
             The system has identified repeated non-compliance for this worker across
-            the last 30 days, concentrated around safety shoes and gas detector checks.
+            the last 30 days, concentrated around safety boots and gas detector checks.
           </p>
           <div className="label-op mb-1.5">Recommended Action</div>
           <p className="text-xs text-text mb-5">Supervisor intervention.</p>
-          <button className="w-full py-2.5 rounded-md border border-border text-xs font-bold uppercase tracking-wide hover:border-safety hover:text-safety transition focus-ring">
+          <button onClick={() => navigate('/alerts')} className="w-full py-2.5 rounded-md border border-border text-xs font-bold uppercase tracking-wide hover:border-safety hover:text-safety transition focus-ring mb-3">
             View Audit History
           </button>
+
+          <div className="pt-3 border-t border-border/50">
+            <div className="label-op !text-[0.62rem] mb-2 text-textMuted">Download Safety Dossier</div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleDownloadPdf('WEEKLY')}
+                disabled={downloadingPeriod !== null}
+                className="flex-1 py-2 rounded-md border border-border text-[0.68rem] font-bold uppercase tracking-wide hover:border-safety hover:text-safety transition flex items-center justify-center gap-1.5 focus-ring disabled:opacity-50"
+              >
+                {downloadingPeriod === 'WEEKLY' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                Weekly PDF
+              </button>
+              <button
+                onClick={() => handleDownloadPdf('MONTHLY')}
+                disabled={downloadingPeriod !== null}
+                className="flex-1 py-2 rounded-md bg-safety text-onSafety text-[0.68rem] font-bold uppercase tracking-wide hover:brightness-110 transition flex items-center justify-center gap-1.5 focus-ring disabled:opacity-50"
+              >
+                {downloadingPeriod === 'MONTHLY' ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                Monthly PDF
+              </button>
+            </div>
+            {pdfStatus.msg && (
+              <div className={`mt-2.5 text-[0.7rem] px-2.5 py-1.5 rounded flex items-center gap-1.5 animate-fadeIn ${
+                pdfStatus.type === 'success' ? 'bg-safetySubtle text-safety border border-safety/30' : 'bg-dangerSubtle text-danger border border-danger/30'
+              }`}>
+                {pdfStatus.type === 'success' ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                {pdfStatus.msg}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

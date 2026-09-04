@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import calendar
+import io
 import json
+import logging
 from datetime import date as date_type, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.core.audit import create_audit_log
+from app.services.report_pdf import generate_all_employees_report, generate_employee_report
 from app.models import (
     Alert,
     AttendanceLog,
@@ -39,6 +45,7 @@ from app.services.workers import latest_safety_score
 
 
 router = APIRouter(tags=["operations"])
+logger = logging.getLogger(__name__)
 
 
 class StatusPatch(BaseModel):
@@ -214,17 +221,57 @@ def _gate_event_row(event: GateEvent) -> dict:
 
 
 def _report_row(report: Report, db: Session) -> dict:
+    worker = db.get(Worker, report.generated_by) if report.generated_by else None
+
+    # Calculate actual compliance event records in this period from db
+    comp_count = db.query(func.count(ComplianceLog.log_id)).filter(
+        func.date(ComplianceLog.entry_time) >= str(report.period_start),
+        func.date(ComplianceLog.entry_time) <= str(report.period_end),
+    )
+    if report.generated_by:
+        comp_count = comp_count.filter(ComplianceLog.worker_id == report.generated_by)
+    records_count = comp_count.scalar() or 0
+
+    file_name = report.file_url or ""
+    is_all = "All_Employees" in file_name or "ALL_EMPLOYEES" in file_name.upper()
+    is_employee = bool((worker or ("Employee_" in file_name)) and not is_all)
+    period_name = "Monthly" if "MONTHLY" in (report.report_type or "").upper() or "Monthly" in file_name else "Weekly"
+
+    if is_employee and worker:
+        name = f"{period_name} Employee Safety Audit — {worker.name} ({worker.employee_code})"
+        scope = "Individual Employee"
+        target = f"{worker.name} ({worker.employee_code})"
+    elif is_employee and "Employee_" in file_name:
+        parts = file_name.replace(".pdf", "").split("_")
+        code = parts[3] if len(parts) > 3 else "Worker"
+        name = f"{period_name} Employee Safety Audit ({code})"
+        scope = "Individual Employee"
+        target = code
+    else:
+        name = f"{period_name} Workforce Safety & Compliance Roster"
+        scope = "All Employees"
+        target = "Mine-Wide Workforce"
+
+    download_url = f"/reports/{report.report_id}/download"
+    gen_time_str = report.generated_at.strftime("%d %b %Y, %H:%M") if report.generated_at else "—"
+
     return {
         "report_id": report.report_id,
-        "id": f"RPT-{report.report_id:02d}",
-        "name": report.report_type.replace("_", " ").title(),
-        "description": f"{report.report_type.replace('_', ' ').title()} report",
-        "lastGenerated": report.generated_at,
-        "records": 0,
-        "status": "READY" if report.file_url else "GENERATED",
+        "id": f"RPT-{report.report_id:04d}",
+        "name": name,
+        "report_type": period_name.upper(),
+        "scope": scope,
+        "target": target,
+        "description": f"Audit-ready {period_name.lower()} report covering {report.period_start.strftime('%d %b %Y')} to {report.period_end.strftime('%d %b %Y')}",
+        "date": report.period_end.strftime("%Y-%m-%d"),
+        "period_start": str(report.period_start),
+        "period_end": str(report.period_end),
+        "period_label": f"{report.period_start.strftime('%d %b %Y')} – {report.period_end.strftime('%d %b %Y')}",
+        "lastGenerated": gen_time_str,
+        "records": records_count,
+        "status": "READY",
         "file_url": report.file_url,
-        "period_start": report.period_start,
-        "period_end": report.period_end,
+        "download_url": download_url,
     }
 
 
@@ -585,6 +632,16 @@ def check_in_worker(payload: CheckInRequest, db: Session = Depends(get_db)):
         existing.status = "PRESENT"
         if payload.entry_time:
             existing.entry_time = now
+        create_audit_log(
+            db,
+            category="ATTENDANCE",
+            action="ATTENDANCE_ALREADY_INSIDE",
+            status="PRESENT",
+            message="Check-in skipped | worker already has open attendance record",
+            worker_id=existing.worker_id,
+            gate_id=existing.gate_id,
+            metadata={"attendance_id": existing.attendance_id, "status": "PRESENT"},
+        )
         db.commit()
         db.refresh(existing)
         return _attendance_row(existing, db)
@@ -596,30 +653,163 @@ def check_in_worker(payload: CheckInRequest, db: Session = Depends(get_db)):
         status="PRESENT",
     )
     db.add(log)
+    create_audit_log(
+        db,
+        category="ATTENDANCE",
+        action="ATTENDANCE_CHECKIN",
+        status="PRESENT",
+        message="Manual check-in | attendance record created",
+        worker_id=worker.worker_id,
+        gate_id=gate.gate_id,
+        metadata={"entry_status": "PRESENT"},
+    )
     db.commit()
     db.refresh(log)
     return _attendance_row(log, db)
 
 
 @router.post("/attendance/{attendance_id}/checkout")
-def check_out_worker(attendance_id: int, db: Session = Depends(get_db)):
-    log = db.get(AttendanceLog, attendance_id)
+def check_out_worker(
+    attendance_id: int,
+    db: Session = Depends(get_db),
+):
+    logger.info(
+        "Worker checkout requested | attendance_id=%s",
+        attendance_id,
+    )
+
+    log = db.get(
+        AttendanceLog,
+        attendance_id,
+    )
+
     if log is None:
-        raise HTTPException(404, "Attendance record not found")
+        logger.warning(
+            "Checkout failed | attendance_id=%s record_not_found",
+            attendance_id,
+        )
+
+        raise HTTPException(
+            404,
+            "Attendance record not found",
+        )
+
+    logger.info(
+        "Worker checkout started | "
+        "attendance_id=%s worker_id=%s gate_id=%s "
+        "current_status=%s entry_time=%s",
+        attendance_id,
+        log.worker_id,
+        log.gate_id,
+        log.status,
+        log.entry_time,
+    )
+
     log.exit_time = datetime.now()
     log.status = "OUTSIDE"
+
+    create_audit_log(
+        db,
+        category="ATTENDANCE",
+        action="WORKER_CHECKOUT",
+        status="OUTSIDE",
+        message=(
+            f"Worker checked out | "
+            f"attendance_id={log.attendance_id} "
+            f"worker_id={log.worker_id}"
+        ),
+        worker_id=log.worker_id,
+        gate_id=log.gate_id,
+        metadata={
+            "attendance_id": log.attendance_id,
+            "exit_status": "OUTSIDE",
+        },
+    )
+
     db.commit()
     db.refresh(log)
-    return _attendance_row(log, db)
+
+    logger.info(
+        "Worker checkout completed | "
+        "attendance_id=%s worker_id=%s gate_id=%s "
+        "exit_time=%s status=%s",
+        log.attendance_id,
+        log.worker_id,
+        log.gate_id,
+        log.exit_time,
+        log.status,
+    )
+
+    return _attendance_row(
+        log,
+        db,
+    )
+
 
 
 @router.post("/attendance", status_code=status.HTTP_201_CREATED)
-def create_attendance(payload: AttendanceLogCreate, db: Session = Depends(get_db)):
-    log = AttendanceLog(**payload.model_dump())
+def create_attendance(
+    payload: AttendanceLogCreate,
+    db: Session = Depends(get_db),
+):
+    logger.info(
+        "Attendance creation requested | "
+        "event_id=%s worker_id=%s gate_id=%s "
+        "entry_time=%s status=%s",
+        payload.event_id,
+        payload.worker_id,
+        payload.gate_id,
+        payload.entry_time,
+        payload.status,
+    )
+
+    log = AttendanceLog(
+        **payload.model_dump()
+    )
+
     db.add(log)
+
+    create_audit_log(
+        db,
+        category="ATTENDANCE",
+        action="ATTENDANCE_CREATED",
+        status=payload.status,
+        message=(
+            f"Attendance created via API | "
+            f"worker_id={payload.worker_id} "
+            f"gate_id={payload.gate_id} "
+            f"status={payload.status}"
+        ),
+        event_id=payload.event_id,
+        worker_id=payload.worker_id,
+        gate_id=payload.gate_id,
+        metadata={
+            "status": payload.status,
+            "entry_time": str(payload.entry_time),
+        },
+    )
+
     db.commit()
+
     db.refresh(log)
-    return _attendance_row(log, db)
+
+    logger.info(
+        "Attendance created | "
+        "attendance_id=%s event_id=%s worker_id=%s "
+        "gate_id=%s entry_time=%s status=%s",
+        log.attendance_id,
+        log.event_id,
+        log.worker_id,
+        log.gate_id,
+        log.entry_time,
+        log.status,
+    )
+
+    return _attendance_row(
+        log,
+        db,
+    )
+
 
 
 @router.get("/attendance/{attendance_id}")
@@ -669,6 +859,24 @@ def list_alerts(date: str | None = None, shift: str | None = None, gate_id: int 
 def create_alert(payload: AlertCreate, db: Session = Depends(get_db)):
     alert = Alert(**payload.model_dump())
     db.add(alert)
+    create_audit_log(
+        db,
+        category="ALERT",
+        action="ALERT_CREATED",
+        status=payload.severity,
+        message=(
+            f"Alert created via API | "
+            f"type={payload.alert_type} "
+            f"severity={payload.severity}"
+        ),
+        event_id=payload.event_id,
+        worker_id=payload.worker_id,
+        gate_id=payload.gate_id,
+        metadata={
+            "alert_type": payload.alert_type,
+            "severity": payload.severity,
+        },
+    )
     db.commit()
     db.refresh(alert)
     return _alert_row(alert)
@@ -716,12 +924,75 @@ def list_compliance(limit: int = Query(500, ge=1, le=5000), sync_status: str | N
 
 
 @router.post("/compliance", status_code=status.HTTP_201_CREATED)
-def create_compliance(payload: ComplianceLogCreate, db: Session = Depends(get_db)):
-    log = ComplianceLog(**payload.model_dump())
+def create_compliance(
+    payload: ComplianceLogCreate,
+    db: Session = Depends(get_db),
+):
+    logger.info(
+        "Compliance creation requested | "
+        "event_id=%s worker_id=%s gate_id=%s "
+        "final_verdict=%s overall_status=%s "
+        "compliance_score=%s confidence_score=%s",
+        payload.event_id,
+        payload.worker_id,
+        payload.gate_id,
+        payload.final_verdict,
+        payload.overall_status,
+        payload.compliance_score,
+        payload.confidence_score,
+    )
+
+    log = ComplianceLog(
+        **payload.model_dump()
+    )
+
     db.add(log)
+
+    create_audit_log(
+        db,
+        category="COMPLIANCE",
+        action="COMPLIANCE_CREATED",
+        status=payload.overall_status,
+        message=(
+            f"Compliance log created via API | "
+            f"verdict={payload.final_verdict} "
+            f"status={payload.overall_status}"
+        ),
+        event_id=payload.event_id,
+        worker_id=payload.worker_id,
+        gate_id=payload.gate_id,
+        metadata={
+            "final_verdict": payload.final_verdict,
+            "overall_status": payload.overall_status,
+            "compliance_score": payload.compliance_score,
+            "confidence_score": payload.confidence_score,
+        },
+    )
+
     db.commit()
+
     db.refresh(log)
-    return _compliance_row(log, db)
+
+    logger.info(
+        "Compliance created | "
+        "log_id=%s event_id=%s worker_id=%s gate_id=%s "
+        "final_verdict=%s overall_status=%s "
+        "compliance_score=%s confidence_score=%s",
+        log.log_id,
+        log.event_id,
+        log.worker_id,
+        log.gate_id,
+        log.final_verdict,
+        log.overall_status,
+        log.compliance_score,
+        log.confidence_score,
+    )
+
+    return _compliance_row(
+        log,
+        db,
+    )
+
 
 
 @router.get("/compliance/{log_id}")
@@ -758,16 +1029,15 @@ def delete_compliance(log_id: int, db: Session = Depends(get_db)):
 def list_reports(date: str | None = None, shift: str | None = None, gate_id: int | None = None, worker: str | None = None, db: Session = Depends(get_db)):
     selected, shift, gate_id = _query_filters(date, shift, gate_id)
     query = db.query(Report)
-    if selected: query = query.filter(Report.period_start <= selected, Report.period_end >= selected)
+    if selected:
+        query = query.filter(Report.period_start <= selected, Report.period_end >= selected)
+    if worker:
+        worker_obj = db.query(Worker).filter(
+            or_(Worker.employee_code.ilike(f"%{worker}%"), Worker.name.ilike(f"%{worker}%"))
+        ).first()
+        if worker_obj:
+            query = query.filter(Report.generated_by == worker_obj.worker_id)
     reports = [_report_row(report, db) for report in query.order_by(Report.generated_at.desc()).all()]
-    # Report metadata is scoped to the same event slice as the operational pages.
-    event_query = _date_filters(db.query(ComplianceLog), ComplianceLog, selected, shift, gate_id, worker)
-    legacy_count = event_query.filter(ComplianceLog.event_id.is_(None)).with_entities(func.count(ComplianceLog.log_id)).scalar() or 0
-    gate_event_query = db.query(GateEvent).filter(GateEvent.lifecycle == "FINALIZED")
-    if selected: gate_event_query = gate_event_query.filter(func.date(GateEvent.edge_timestamp) == str(selected))
-    if gate_id: gate_event_query = gate_event_query.filter(GateEvent.gate_id == gate_id)
-    event_count = legacy_count + (gate_event_query.with_entities(func.count(GateEvent.event_id)).scalar() or 0)
-    for report in reports: report["records"] = event_count
     return reports
 
 
@@ -786,6 +1056,52 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
     if report is None:
         raise HTTPException(404, "Report not found")
     return _report_row(report, db)
+
+
+@router.get("/reports/{report_id}/download")
+def download_report_by_id(report_id: int, db: Session = Depends(get_db)):
+    report = db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(404, "Report not found")
+
+    period_type = "MONTHLY" if "MONTHLY" in (report.report_type or "").upper() else "WEEKLY"
+    if report.generated_by:
+        worker = db.get(Worker, report.generated_by)
+        if not worker:
+            raise HTTPException(404, "Worker associated with report not found")
+        try:
+            pdf_bytes = generate_employee_report(
+                db=db,
+                worker_id=worker.worker_id,
+                start_date=report.period_start,
+                end_date=report.period_end,
+                period_type=period_type,
+            )
+        except Exception as exc:
+            logger.error("Employee PDF download failed | error=%s", exc, exc_info=True)
+            raise HTTPException(500, "Failed to generate report PDF") from exc
+        filename = report.file_url or f"SURAKSHA_Employee_{period_type}_{worker.employee_code}_{report.period_end}.pdf"
+    else:
+        try:
+            pdf_bytes = generate_all_employees_report(
+                db=db,
+                start_date=report.period_start,
+                end_date=report.period_end,
+                period_type=period_type,
+            )
+        except Exception as exc:
+            logger.error("All-Employees PDF download failed | error=%s", exc, exc_info=True)
+            raise HTTPException(500, "Failed to generate workforce report PDF") from exc
+        filename = report.file_url or f"SURAKSHA_All_Employees_{period_type}_{report.period_end}.pdf"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
 
 
 @router.patch("/reports/{report_id}")
@@ -808,6 +1124,230 @@ def delete_report(report_id: int, db: Session = Depends(get_db)):
     db.delete(report)
     db.commit()
     return Response(status_code=204)
+
+
+def _resolve_report_dates(period: str | None, date_str: str | None, month_str: str | None) -> tuple[date_type, date_type, str]:
+    normalized_period = (period or "WEEKLY").upper()
+    if normalized_period not in ("WEEKLY", "MONTHLY"):
+        raise HTTPException(status_code=400, detail="Period must be WEEKLY or MONTHLY")
+
+    if normalized_period == "MONTHLY":
+        if month_str:
+            try:
+                parts = month_str.strip().split("-")
+                parsed_year, parsed_month = int(parts[0]), int(parts[1])
+                start_date = date_type(parsed_year, parsed_month, 1)
+                num_days = calendar.monthrange(parsed_year, parsed_month)[1]
+                end_date = date_type(parsed_year, parsed_month, num_days)
+            except Exception:
+                raise HTTPException(status_code=400, detail="month must be formatted as YYYY-MM")
+        elif date_str:
+            try:
+                dt = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+                start_date = date_type(dt.year, dt.month, 1)
+                num_days = calendar.monthrange(dt.year, dt.month)[1]
+                end_date = date_type(dt.year, dt.month, num_days)
+            except Exception:
+                raise HTTPException(status_code=400, detail="date must be formatted as YYYY-MM-DD")
+        else:
+            today = datetime.now(timezone.utc).date()
+            start_date = date_type(today.year, today.month, 1)
+            num_days = calendar.monthrange(today.year, today.month)[1]
+            end_date = date_type(today.year, today.month, num_days)
+    else:  # WEEKLY
+        if date_str:
+            try:
+                ref_date = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+            except Exception:
+                raise HTTPException(status_code=400, detail="date must be formatted as YYYY-MM-DD")
+        else:
+            ref_date = datetime.now(timezone.utc).date()
+        # 7-day reporting period ending on reference date
+        start_date = ref_date - timedelta(days=6)
+        end_date = ref_date
+
+    return start_date, end_date, normalized_period
+
+
+def _resolve_worker_entity(worker_id_val: str | int, db: Session) -> Worker:
+    val_str = str(worker_id_val).strip()
+    worker = None
+    if val_str.isdigit():
+        worker = db.get(Worker, int(val_str))
+    if worker is None:
+        worker = db.query(Worker).filter(func.lower(Worker.employee_code) == val_str.lower()).one_or_none()
+    if worker is None:
+        raise HTTPException(status_code=404, detail=f"Worker '{worker_id_val}' not found")
+    return worker
+
+
+@router.get("/reports/pdf/employee/{worker_id}")
+def download_employee_report_pdf(
+    worker_id: str,
+    period: str = Query("WEEKLY", description="WEEKLY or MONTHLY"),
+    date: str | None = Query(None, description="Reference date YYYY-MM-DD"),
+    month: str | None = Query(None, description="Month YYYY-MM for monthly report"),
+    shift: str | None = Query(None, description="Shift filter (A, B, C or ALL)"),
+    gate_id: int | None = Query(None, description="Checkpoint gate ID"),
+    db: Session = Depends(get_db),
+):
+    worker = _resolve_worker_entity(worker_id, db)
+    start_date, end_date, normalized_period = _resolve_report_dates(period, date, month)
+    shift_val = shift.upper() if shift and shift.upper() != "ALL" else None
+
+    try:
+        pdf_bytes = generate_employee_report(
+            db=db,
+            worker_id=worker.worker_id,
+            start_date=start_date,
+            end_date=end_date,
+            period_type=normalized_period,
+            shift=shift_val,
+            gate_id=gate_id,
+        )
+    except Exception as exc:
+        logger.error("Employee PDF generation failed | worker_id=%s error=%s", worker.worker_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate employee safety report PDF") from exc
+
+    if normalized_period == "MONTHLY":
+        filename = f"SURAKSHA_Employee_Monthly_{worker.employee_code}_{start_date.strftime('%Y-%m')}.pdf"
+        rpt_type = "MONTHLY"
+    else:
+        filename = f"SURAKSHA_Employee_Weekly_{worker.employee_code}_{end_date.strftime('%Y-%m-%d')}.pdf"
+        rpt_type = "WEEKLY"
+
+    # Audit logging
+    create_audit_log(
+        db,
+        category="REPORT",
+        action="REPORT_GENERATED",
+        status="GENERATED",
+        message=f"{normalized_period.title()} safety report generated for employee {worker.name} ({worker.employee_code})",
+        worker_id=worker.worker_id,
+        gate_id=gate_id,
+        metadata={
+            "scope": "INDIVIDUAL_EMPLOYEE",
+            "report_type": rpt_type,
+            "period": normalized_period,
+            "worker_id": worker.worker_id,
+            "employee_code": worker.employee_code,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "shift": shift_val,
+            "gate_id": gate_id,
+            "filename": filename,
+        },
+    )
+
+    # Save to Report table
+    report_record = Report(
+        report_type=rpt_type,
+        period_start=start_date,
+        period_end=end_date,
+        generated_by=worker.worker_id,
+        file_url=filename,
+    )
+    db.add(report_record)
+    db.commit()
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.get("/reports/pdf/all")
+def download_all_employees_report_pdf(
+    period: str = Query("WEEKLY", description="WEEKLY or MONTHLY"),
+    date: str | None = Query(None, description="Reference date YYYY-MM-DD"),
+    month: str | None = Query(None, description="Month YYYY-MM for monthly report"),
+    shift: str | None = Query(None, description="Shift filter (A, B, C or ALL)"),
+    gate_id: int | None = Query(None, description="Checkpoint gate ID"),
+    db: Session = Depends(get_db),
+):
+    start_date, end_date, normalized_period = _resolve_report_dates(period, date, month)
+    shift_val = shift.upper() if shift and shift.upper() != "ALL" else None
+
+    try:
+        pdf_bytes = generate_all_employees_report(
+            db=db,
+            start_date=start_date,
+            end_date=end_date,
+            period_type=normalized_period,
+            shift=shift_val,
+            gate_id=gate_id,
+        )
+    except Exception as exc:
+        logger.error("All-Employees PDF generation failed | error=%s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate workforce safety report PDF") from exc
+
+    if normalized_period == "MONTHLY":
+        filename = f"SURAKSHA_All_Employees_Monthly_{start_date.strftime('%Y-%m')}.pdf"
+        rpt_type = "MONTHLY"
+    else:
+        filename = f"SURAKSHA_All_Employees_Weekly_{end_date.strftime('%Y-%m-%d')}.pdf"
+        rpt_type = "WEEKLY"
+
+    create_audit_log(
+        db,
+        category="REPORT",
+        action="REPORT_GENERATED",
+        status="GENERATED",
+        message=f"{normalized_period.title()} workforce safety report generated for mine",
+        gate_id=gate_id,
+        metadata={
+            "scope": "ALL_EMPLOYEES",
+            "report_type": rpt_type,
+            "period": normalized_period,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "shift": shift_val,
+            "gate_id": gate_id,
+            "filename": filename,
+        },
+    )
+
+    report_record = Report(
+        report_type=rpt_type,
+        period_start=start_date,
+        period_end=end_date,
+        file_url=filename,
+    )
+    db.add(report_record)
+    db.commit()
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.get("/reports/weekly/employee/{worker_id}")
+def get_weekly_employee_report_pdf(worker_id: str, date: str | None = None, shift: str | None = None, gate_id: int | None = None, db: Session = Depends(get_db)):
+    return download_employee_report_pdf(worker_id=worker_id, period="WEEKLY", date=date, shift=shift, gate_id=gate_id, db=db)
+
+
+@router.get("/reports/monthly/employee/{worker_id}")
+def get_monthly_employee_report_pdf(worker_id: str, month: str | None = None, date: str | None = None, shift: str | None = None, gate_id: int | None = None, db: Session = Depends(get_db)):
+    return download_employee_report_pdf(worker_id=worker_id, period="MONTHLY", date=date, month=month, shift=shift, gate_id=gate_id, db=db)
+
+
+@router.get("/reports/weekly/all")
+def get_weekly_all_employees_report_pdf(date: str | None = None, shift: str | None = None, gate_id: int | None = None, db: Session = Depends(get_db)):
+    return download_all_employees_report_pdf(period="WEEKLY", date=date, shift=shift, gate_id=gate_id, db=db)
+
+
+@router.get("/reports/monthly/all")
+def get_monthly_all_employees_report_pdf(month: str | None = None, date: str | None = None, shift: str | None = None, gate_id: int | None = None, db: Session = Depends(get_db)):
+    return download_all_employees_report_pdf(period="MONTHLY", date=date, month=month, shift=shift, gate_id=gate_id, db=db)
 
 
 @router.get("/audit")

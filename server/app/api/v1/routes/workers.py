@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Alert, AttendanceLog, ComplianceLog, Notification, Report, SafetyScore, Worker, WorkerPpe
+from app.models import Alert, AttendanceLog, ComplianceLog, Report, SafetyScore, Worker, WorkerPpe
 from app.schemas.department import DepartmentRead
 from app.schemas.worker import WorkerCreate, WorkerUpdate
 from app.services import workers as worker_service
@@ -194,7 +194,6 @@ async def delete_worker(worker_id: int, db: Session = Depends(get_db)):
         if log_ids:
             alert_filter = alert_filter | Alert.log_id.in_(log_ids)
         db.query(Alert).filter(alert_filter).delete(synchronize_session=False)
-        db.query(Notification).filter(Notification.recipient_id == worker_id).delete(synchronize_session=False)
         db.query(AttendanceLog).filter(AttendanceLog.worker_id == worker_id).delete(synchronize_session=False)
         db.query(ComplianceLog).filter(ComplianceLog.worker_id == worker_id).delete(synchronize_session=False)
         db.query(WorkerPpe).filter(WorkerPpe.worker_id == worker_id).delete(synchronize_session=False)

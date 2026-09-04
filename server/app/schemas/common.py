@@ -20,8 +20,6 @@ AttendanceStatus = Literal["PRESENT", "INSIDE", "OUTSIDE", "ABSENT"]
 DetectionSource = Literal["AI", "QR", "RFID", "SENSOR"]
 AlertSeverity = Literal["INFO", "WARNING", "CRITICAL"]
 AlertStatus = Literal["ACTIVE", "RESOLVED", "CLOSED"]
-NotificationChannel = Literal["SMS", "EMAIL", "PUSH", "APP"]
-NotificationStatus = Literal["SENT", "FAILED", "PENDING"]
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH"]
 ReportType = Literal["DAILY", "WEEKLY", "MONTHLY", "WORKER_WISE", "GATE_WISE", "PPE_WISE"]
 
@@ -43,8 +41,6 @@ __all__ = [
     "Latitude",
     "Longitude",
     "MineStatus",
-    "NotificationChannel",
-    "NotificationStatus",
     "OrmModel",
     "ReportType",
     "RiskLevel",

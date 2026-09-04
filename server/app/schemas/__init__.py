@@ -5,7 +5,6 @@ from app.schemas.department import DepartmentCreate, DepartmentRead, DepartmentU
 from app.schemas.device import DeviceCreate, DeviceRead, DeviceUpdate
 from app.schemas.gate import GateCreate, GateRead, GateUpdate
 from app.schemas.mine import MineCreate, MineRead, MineUpdate
-from app.schemas.notification import NotificationCreate, NotificationRead, NotificationUpdate
 from app.schemas.ppe_detection import PpeDetectionCreate, PpeDetectionRead, PpeDetectionUpdate
 from app.schemas.ppe_item import PpeItemCreate, PpeItemRead, PpeItemUpdate
 from app.schemas.report import ReportCreate, ReportRead, ReportUpdate
@@ -35,9 +34,6 @@ __all__ = [
     "MineCreate",
     "MineRead",
     "MineUpdate",
-    "NotificationCreate",
-    "NotificationRead",
-    "NotificationUpdate",
     "PpeDetectionCreate",
     "PpeDetectionRead",
     "PpeDetectionUpdate",

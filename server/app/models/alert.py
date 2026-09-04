@@ -29,4 +29,3 @@ class Alert(Base):
     compliance_log = relationship("ComplianceLog", back_populates="alerts")
     worker = relationship("Worker", back_populates="alerts")
     gate = relationship("Gate")
-    notifications = relationship("Notification", back_populates="alert", cascade="all, delete-orphan")

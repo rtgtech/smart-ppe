@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -19,11 +19,7 @@ class PpeDetection(Base):
     ppe_id: Mapped[int] = mapped_column(ForeignKey("ppe_items.ppe_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
     detected: Mapped[bool] = mapped_column(Boolean, nullable=False)
     confidence_score: Mapped[float | None] = mapped_column(Float)
-    bounding_box: Mapped[str | None] = mapped_column(Text)
     detection_source: Mapped[str] = mapped_column(String(30), nullable=False)
-    evidence_state: Mapped[str | None] = mapped_column(String(20))
-    observed_identifier: Mapped[str | None] = mapped_column(String(128))
-    assignment_result: Mapped[str | None] = mapped_column(String(30))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     compliance_log = relationship("ComplianceLog", back_populates="detections")

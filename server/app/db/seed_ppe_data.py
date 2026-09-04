@@ -168,8 +168,6 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
                 compliance_score=compliance_score,
                 confidence_score=round(sum(row[3] for row in detection_rows) / len(detection_rows), 1),
                 image_url=marker,
-                latitude=23.7957,
-                longitude=86.4304,
                 offline_flag=day_offset % 11 == 0 and worker_index == 3,
                 sync_status="SYNCED",
             )
@@ -182,7 +180,6 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
                     ppe_id=item.ppe_id,
                     detected=detected,
                     confidence_score=confidence,
-                    bounding_box="[124, 68, 302, 418]" if details["source"] == "AI" and detected else None,
                     detection_source=details["source"],
                 ))
 

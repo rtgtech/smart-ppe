@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -15,7 +15,6 @@ class Worker(Base):
     worker_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     employee_code: Mapped[str] = mapped_column(String(20), nullable=False, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    photo_url: Mapped[str | None] = mapped_column(Text)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.department_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
     phone: Mapped[str | None] = mapped_column(String(15))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")

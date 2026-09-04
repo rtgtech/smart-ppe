@@ -20,7 +20,6 @@ from app.models import (
     Department,
     Gate,
     Mine,
-    Notification,
     PpeDetection,
     PpeItem,
     Report,
@@ -174,8 +173,6 @@ class WorkerDeletionTest(unittest.IsolatedAsyncioTestCase):
             Report(report_type="WORKER_WISE", period_start=now.date(), period_end=now.date(), generated_by=worker.worker_id),
             alert,
         ])
-        session.flush()
-        session.add(Notification(alert_id=alert.alert_id, recipient_id=worker.worker_id, channel="APP", message="Test", status="SENT"))
         session.commit()
 
         with tempfile.TemporaryDirectory() as directory:
@@ -187,7 +184,7 @@ class WorkerDeletionTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, "DELETED")
             self.assertEqual(registry.count(), 0)
 
-        for model in (Worker, WorkerPpe, SafetyScore, ComplianceLog, PpeDetection, AttendanceLog, Alert, Notification):
+        for model in (Worker, WorkerPpe, SafetyScore, ComplianceLog, PpeDetection, AttendanceLog, Alert):
             self.assertEqual(session.query(model).count(), 0, model.__name__)
         report = session.query(Report).one()
         self.assertIsNone(report.generated_by)
