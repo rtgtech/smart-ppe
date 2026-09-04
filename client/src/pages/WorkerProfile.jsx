@@ -115,7 +115,7 @@ export default function WorkerProfile() {
           </div>
           <p className="text-xs text-textSecondary leading-relaxed mb-4">
             The system has identified repeated non-compliance for this worker across
-            the last 30 days, concentrated around safety boots and gas detector checks.
+            the last 30 days, concentrated around safety shoes and gas detector checks.
           </p>
           <div className="label-op mb-1.5">Recommended Action</div>
           <p className="text-xs text-text mb-5">Supervisor intervention.</p>

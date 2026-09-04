@@ -22,13 +22,14 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.core.audit import create_audit_log
 from app.models import Alert, AttendanceLog, ComplianceLog, Device, Gate, GateEvent, PpeDetection, PpeItem, SyncOutbox, Worker
-from app.services.ppe_compliance import PersonTracker
+from app.services.ppe_compliance import PPE_ITEM_SPECS, PersonTracker
 from app.services.vision import MAX_FRAME_BYTES, decode_jpeg, infer_frame, vision_lock
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/entry", tags=["entry"])
 settings = get_settings()
-REQUIRED = {"Helmet": "helmet", "Vest": "vest", "Boots": "boots"}
+REQUIRED = {spec["display_name"]: label for label, spec in PPE_ITEM_SPECS.items()}
+TRACK_ANCHOR = "Helmet"
 WINDOW = 5
 CONFIRM = 3
 _event_locks: dict[str, asyncio.Lock] = {}
@@ -75,7 +76,7 @@ def _require_ppe_catalog(db: Session) -> None:
         for item in db.query(PpeItem).filter(PpeItem.is_mandatory.is_(True)).all()
     }
     if configured != set(REQUIRED):
-        raise HTTPException(503, "Helmet, Vest, and Boots must be configured as mandatory PPE")
+        raise HTTPException(503, f"{', '.join(REQUIRED)} must be configured as mandatory PPE")
 
 
 def _event_dict(event: GateEvent) -> dict[str, Any]:
@@ -171,11 +172,7 @@ def _frame_evidence(encoded: bytes, persons: list[dict[str, Any]], faces: list[d
     for item_name, label in REQUIRED.items():
         worn_state = person[label] if person else "UNKNOWN"
         associations = person["associations"][label] if person else []
-        region_names = {
-            "helmet": ["head"],
-            "vest": ["torso"],
-            "boots": ["left_boot", "right_boot"],
-        }[label]
+        region_names = PPE_ITEM_SPECS[label]["regions"]
         region_boxes = [person["rois"][name]["bbox"] for name in region_names] if person else []
         if framing and quality and worn_state == "YES":
             visual[item_name] = {
@@ -188,13 +185,17 @@ def _frame_evidence(encoded: bytes, persons: list[dict[str, Any]], faces: list[d
                 "worn_state": worn_state,
             }
         elif framing and quality and worn_state == "NO":
+            negative_associations = [row for row in associations if row.get("is_negative")]
             visual[item_name] = {
                 "state": "NEGATIVE",
                 "confidence": person[f"{label}_confidence"],
-                "bbox": None,
+                "bbox": [row["bbox"] for row in negative_associations] or None,
                 "track_id": person["track_id"],
                 "roi": region_boxes,
-                "association_score": None,
+                "association_score": min(
+                    (row["association_score"] for row in negative_associations),
+                    default=None,
+                ),
                 "worn_state": worn_state,
             }
         else:
@@ -215,13 +216,13 @@ def _summarize(db: Session, event: GateEvent, state: dict[str, Any]) -> tuple[di
     frames = state.get("frames", [])[-WINDOW:]
     track_counts: Counter[int] = Counter()
     for frame in frames:
-        track_id = frame.get("visual", {}).get("Helmet", {}).get("track_id")
+        track_id = frame.get("visual", {}).get(TRACK_ANCHOR, {}).get("track_id")
         if track_id is not None and not frame.get("multiple"):
             track_counts[track_id] += 1
     candidate_track = track_counts.most_common(1)[0][0] if track_counts else None
     tracked_frames = [
         frame for frame in frames
-        if candidate_track is None or frame.get("visual", {}).get("Helmet", {}).get("track_id") == candidate_track
+        if candidate_track is None or frame.get("visual", {}).get(TRACK_ANCHOR, {}).get("track_id") == candidate_track
     ]
     matches: dict[str, list[float]] = {}
     for frame in tracked_frames:

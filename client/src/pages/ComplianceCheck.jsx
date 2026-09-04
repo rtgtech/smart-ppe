@@ -1,10 +1,12 @@
-import { AlertTriangle, Check, Footprints, HardHat, LoaderCircle, ShieldCheck, ShieldX, Shirt } from 'lucide-react';
+import { AlertTriangle, Check, Footprints, Glasses, Hand, HardHat, LoaderCircle, Shield, ShieldCheck, ShieldX } from 'lucide-react';
 import { useEntry } from '../components/entry-context';
 
 const ITEMS = [
+  { name: 'Gloves', icon: Hand },
+  { name: 'Goggles', icon: Glasses },
   { name: 'Helmet', icon: HardHat },
-  { name: 'Vest', icon: Shirt },
-  { name: 'Boots', icon: Footprints },
+  { name: 'Mask', icon: Shield },
+  { name: 'Shoes', icon: Footprints },
 ];
 
 export default function ComplianceCheck() {
@@ -33,7 +35,7 @@ export default function ComplianceCheck() {
             <LoaderCircle className="animate-spin" size={26} />
             <div>
               <div className="font-bold">Checking correctly worn PPE</div>
-              <div className="mt-1 text-xs text-textSecondary">Keep your head, torso, and both feet visible.</div>
+              <div className="mt-1 text-xs text-textSecondary">Keep your head, both hands, and both feet visible.</div>
             </div>
           </div>
         </div>
@@ -49,7 +51,7 @@ export default function ComplianceCheck() {
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {ITEMS.map(({ name, icon: ItemIcon }) => {
           const state = evidence.visual?.[name]?.state;
           const confirmed = state === 'CONFIRMED';

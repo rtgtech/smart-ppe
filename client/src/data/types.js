@@ -28,9 +28,11 @@
  * @property {string} workerId
  * @property {string} gateId
  * @property {string} timestamp
+ * @property {boolean} glove
+ * @property {boolean} goggles
  * @property {boolean} helmet
- * @property {boolean} safetyBoots
- * @property {boolean} reflectiveVest
+ * @property {boolean} mask
+ * @property {boolean} shoes
  * @property {number} aiConfidence
  * @property {'ALLOWED'|'DENIED'|'WARNING'} decision
  */

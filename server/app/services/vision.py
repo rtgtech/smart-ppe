@@ -23,14 +23,20 @@ from app.services.face_recognition import (
     annotate_faces,
     validate_person_id,
 )
-from app.services.ppe_compliance import PersonTracker, analyze_compliance, annotate_compliance
+from app.services.ppe_compliance import (
+    MODEL_PPE_CLASSES,
+    PPE_ITEM_SPECS,
+    PersonTracker,
+    analyze_compliance,
+    annotate_compliance,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 STREAM_SERVER_DIR = REPOSITORY_ROOT / "stream_test" / "server"
 
 MODEL_PATH = Path(
-    os.getenv("YOLO_MODEL_PATH", str(REPOSITORY_ROOT / "best.pt"))
+    os.getenv("YOLO_MODEL_PATH", str(REPOSITORY_ROOT / "best2.pt"))
 ).expanduser().resolve()
 POSE_MODEL_SPEC = os.getenv("YOLO_POSE_MODEL", "yolo11n-pose.pt").strip() or "yolo11n-pose.pt"
 FACE_DETECTOR_PATH = Path(
@@ -72,8 +78,7 @@ def _load_services() -> tuple[YOLO, YOLO, FaceEngine, FaceRegistry]:
         )
     model = YOLO(str(MODEL_PATH))
     available = {str(name).lower() for name in model.names.values()}
-    required = {"helmet", "vest", "boots"}
-    missing = sorted(required - available)
+    missing = sorted(MODEL_PPE_CLASSES - available)
     if missing:
         raise RuntimeError(f"The YOLO model is missing required gate classes: {', '.join(missing)}")
     pose = YOLO(POSE_MODEL_SPEC)
@@ -350,23 +355,15 @@ def infer_frame(
     annotated = annotate_compliance(annotated, person_results, detections)
 
     primary_compliance = person_results[0] if len(person_results) == 1 else None
-    has_helmet = bool(primary_compliance and primary_compliance["helmet"] == "YES")
-    has_boots = bool(primary_compliance and primary_compliance["boots"] == "YES")
-    has_vest = bool(primary_compliance and primary_compliance["vest"] == "YES")
-
     ppe_status = {
-        "helmet": has_helmet,
-        "safetyBoots": has_boots,
-        "reflectiveVest": has_vest,
+        label: bool(primary_compliance and primary_compliance[label] == "YES")
+        for label in PPE_ITEM_SPECS
     }
-
-    missing_items: list[str] = []
-    if primary_compliance and primary_compliance["helmet"] == "NO":
-        missing_items.append("Helmet")
-    if primary_compliance and primary_compliance["boots"] == "NO":
-        missing_items.append("Boots")
-    if primary_compliance and primary_compliance["vest"] == "NO":
-        missing_items.append("Vest")
+    missing_items = [
+        spec["display_name"]
+        for label, spec in PPE_ITEM_SPECS.items()
+        if primary_compliance and primary_compliance[label] == "NO"
+    ]
 
     # Face recognition runs on the original image while annotation is layered
     # on top of the YOLO-rendered frame.

@@ -5,9 +5,11 @@ import { PageHeader, Badge, StatusDot } from '../components/ui';
 import AnnotatedVisionFeed from '../components/AnnotatedVisionFeed';
 
 const PPE_LABELS = {
+  glove: 'Gloves',
+  goggles: 'Goggles',
   helmet: 'Helmet',
-  safetyBoots: 'Boots',
-  reflectiveVest: 'Vest',
+  mask: 'Mask',
+  shoes: 'Shoes',
 };
 
 export default function Live() {

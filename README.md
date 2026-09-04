@@ -12,7 +12,7 @@ smart-ppe/
 |-- client/                         React + Vite frontend
 |-- server/                         FastAPI API and vision inference server
 |-- data/suraksha.db                Local SQLite database (created automatically)
-|-- best.pt                         YOLO PPE model
+|-- best2.pt                        YOLO PPE model
 `-- stream_test/server/
     |-- models/                     YuNet and SFace ONNX models
     `-- data/faces.json             Local enrolled-face registry
@@ -33,7 +33,7 @@ must use HTTPS and a secure `wss://` WebSocket endpoint.
 Verify that these files exist before starting the server:
 
 ```text
-best.pt
+best2.pt
 stream_test/server/models/face_detection_yunet_2023mar.onnx
 stream_test/server/models/face_recognition_sface_2021dec.onnx
 ```
@@ -123,8 +123,9 @@ not displayed; the page renders only frames annotated by the server.
 
 The entry workflow first confirms the worker's face on `/entry/biometric`.
 After identity is locked, the same camera and tracking session advances to
-`/entry/compliance`, where fresh frames verify Helmet, Vest, and both Boots in
-their expected anatomical regions before issuing the gate verdict.
+`/entry/compliance`, where fresh frames verify Gloves, Goggles, Helmet, Mask,
+and both Shoes in their expected anatomical regions before issuing the gate
+verdict.
 
 ## Configuration
 
@@ -133,7 +134,7 @@ server:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `YOLO_MODEL_PATH` | `best.pt` in the repository root | PPE model path |
+| `YOLO_MODEL_PATH` | `best2.pt` in the repository root | PPE model path; expected classes are `glove`, `goggles`, `helmet`, `mask`, `shoes`, and their `no_` counterparts |
 | `YOLO_POSE_MODEL` | `yolo11n-pose.pt` | Pose checkpoint path or Ultralytics model name; a model name downloads on first run |
 | `YOLO_DEVICE` | Automatic | Inference device, such as `cpu` or `0` for the first CUDA GPU |
 | `YOLO_IMAGE_SIZE` | `640` | YOLO inference image size |
@@ -174,7 +175,7 @@ client is served over HTTPS.
 - `POST /api/v1/entry/sync/events` - idempotent central synchronization receiver
 
 Each WebSocket `frame_meta` message includes a `persons` array with stable
-`track_id`, Helmet/Vest/Boots `YES`/`NO`/`UNKNOWN` states and confidences,
+`track_id`, Gloves/Goggles/Helmet/Mask/Shoes `YES`/`NO`/`UNKNOWN` states and confidences,
 an overall `COMPLIANT`/`VIOLATION`/`UNKNOWN` status, anatomical ROIs, and the
 PPE detections associated with that person. Existing entry, detection, face,
 and inference-timing fields remain available.

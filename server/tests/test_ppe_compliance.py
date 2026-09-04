@@ -16,6 +16,8 @@ def posed_person(x_offset=0):
         0: [200, 80, .95], 1: [190, 70, .92], 2: [210, 70, .93],
         3: [175, 80, .88], 4: [225, 80, .89],
         5: [160, 170, .96], 6: [240, 170, .95],
+        7: [140, 260, .93], 8: [260, 260, .93],
+        9: [130, 350, .91], 10: [270, 350, .91],
         11: [175, 330, .94], 12: [225, 330, .93],
         13: [175, 440, .91], 14: [225, 440, .92],
         15: [170, 550, .90], 16: [230, 550, .90],
@@ -37,44 +39,60 @@ class PpeComplianceTest(unittest.TestCase):
         result = self.analyze(
             [posed_person()],
             [
+                detection("glove", [108, 315, 158, 375], .91),
+                detection("glove", [242, 315, 292, 375], .90),
+                detection("goggles", [175, 50, 225, 82], .94),
                 detection("helmet", [160, 10, 240, 105], .95),
-                detection("vest", [150, 155, 250, 350], .93),
-                detection("boots", [150, 500, 195, 585], .90),
-                detection("boots", [205, 500, 250, 585], .89),
+                detection("mask", [175, 80, 225, 108], .93),
+                detection("shoes", [150, 500, 195, 585], .90),
+                detection("shoes", [205, 500, 250, 585], .89),
             ],
         )[0]
-        self.assertEqual((result["helmet"], result["vest"], result["boots"]), ("YES", "YES", "YES"))
+        self.assertTrue(all(result[name] == "YES" for name in ("glove", "goggles", "helmet", "mask", "shoes")))
         self.assertEqual(result["status"], "COMPLIANT")
 
     def test_carried_and_background_ppe_do_not_count(self):
         detections = [
             detection("helmet", [170, 250, 230, 310]),
-            detection("vest", [305, 180, 390, 350]),
+            detection("mask", [305, 180, 390, 350]),
         ]
         result = self.analyze([posed_person()], detections)[0]
         self.assertEqual(result["helmet"], "NO")
-        self.assertEqual(result["vest"], "NO")
+        self.assertEqual(result["mask"], "NO")
         self.assertEqual(result["status"], "VIOLATION")
         self.assertTrue(all(row.get("worn") is False for row in detections))
 
-    def test_one_visible_boot_is_not_a_complete_pair(self):
+    def test_one_visible_shoe_is_not_a_complete_pair(self):
         result = self.analyze(
             [posed_person()],
-            [detection("boots", [150, 500, 195, 585])],
+            [detection("shoes", [150, 500, 195, 585])],
         )[0]
-        self.assertEqual(result["boots"], "NO")
-        self.assertEqual(len(result["associations"]["boots"]), 1)
+        self.assertEqual(result["shoes"], "NO")
+        self.assertEqual(len(result["associations"]["shoes"]), 1)
+
+    def test_explicit_negative_class_overrides_positive_detection(self):
+        detections = [
+            detection("goggles", [175, 50, 225, 82], .95),
+            detection("no_goggles", [175, 50, 225, 82], .80),
+        ]
+        result = self.analyze(
+            [posed_person()],
+            detections,
+        )[0]
+        self.assertEqual(result["goggles"], "NO")
+        self.assertEqual(len(result["associations"]["goggles"]), 2)
+        self.assertFalse(detections[1]["worn"])
 
     def test_cropped_low_confidence_person_is_unknown(self):
         person = {"bbox": [0, 0, 220, 400], "confidence": .8, "keypoints": [[0, 0, 0] for _ in range(17)]}
         result = self.analyze([person], [])[0]
-        self.assertEqual((result["helmet"], result["vest"], result["boots"]), ("UNKNOWN", "UNKNOWN", "UNKNOWN"))
+        self.assertTrue(all(result[name] == "UNKNOWN" for name in ("glove", "goggles", "helmet", "mask", "shoes")))
         self.assertEqual(result["status"], "UNKNOWN")
 
     def test_full_body_bbox_fallback_can_support_negative_evidence(self):
         person = {"bbox": [50, 20, 350, 580], "confidence": .8, "keypoints": [[0, 0, 0] for _ in range(17)]}
         result = self.analyze([person], [])[0]
-        self.assertEqual((result["helmet"], result["vest"], result["boots"]), ("NO", "NO", "NO"))
+        self.assertTrue(all(result[name] == "NO" for name in ("glove", "goggles", "helmet", "mask", "shoes")))
         self.assertEqual(result["rois"]["head"]["source"], "bbox")
 
     def test_detection_is_assigned_to_only_the_best_person(self):
@@ -99,10 +117,13 @@ class PpeComplianceTest(unittest.TestCase):
         persons = self.analyze(
             [posed_person()],
             [
+                detection("glove", [108, 315, 158, 375]),
+                detection("glove", [242, 315, 292, 375]),
+                detection("goggles", [175, 50, 225, 82]),
                 detection("helmet", [160, 10, 240, 105]),
-                detection("vest", [150, 155, 250, 350]),
-                detection("boots", [150, 500, 195, 585]),
-                detection("boots", [205, 500, 250, 585]),
+                detection("mask", [175, 80, 225, 108]),
+                detection("shoes", [150, 500, 195, 585]),
+                detection("shoes", [205, 500, 250, 585]),
             ],
         )
         checkerboard = ((np.indices(FRAME_SHAPE[:2]).sum(axis=0) % 2) * 255).astype(np.uint8)
@@ -113,7 +134,10 @@ class PpeComplianceTest(unittest.TestCase):
         evidence = _frame_evidence(encoded.tobytes(), persons, faces)
         self.assertTrue(evidence["framing_valid"])
         self.assertTrue(evidence["quality_valid"])
-        self.assertTrue(all(evidence["visual"][name]["state"] == "POSITIVE" for name in ("Helmet", "Vest", "Boots")))
+        self.assertTrue(all(
+            evidence["visual"][name]["state"] == "POSITIVE"
+            for name in ("Gloves", "Goggles", "Helmet", "Mask", "Shoes")
+        ))
         self.assertEqual(evidence["visual"]["Helmet"]["track_id"], persons[0]["track_id"])
 
 

@@ -14,7 +14,7 @@ export default function SettingsPpe() {
       <button onClick={() => navigate('/settings')} className="flex items-center gap-1.5 text-xs text-textSecondary hover:text-text mb-4 focus-ring">
         <ArrowLeft size={13} /> Back to Settings
       </button>
-      <PageHeader eyebrow="GATE ENTRY RULES" title="Mandatory PPE" subtitle="Helmet, Vest, and Boots are enforced at every gate." />
+      <PageHeader eyebrow="GATE ENTRY RULES" title="Mandatory PPE" subtitle="Gloves, goggles, helmet, mask, and shoes are enforced at every gate." />
 
       <div className="panel divide-y divide-border/60 overflow-hidden">
         {config.map((item) => (

@@ -12,20 +12,32 @@ from app.models import AttendanceLog, ComplianceLog, Gate, PpeDetection, PpeItem
 
 
 PPE_CATALOG = {
+    "Gloves": {
+        "serial_prefix": "GLV",
+        "service_days": 180,
+        "source": "AI",
+        "miss_every": 17,
+    },
+    "Goggles": {
+        "serial_prefix": "GGL",
+        "service_days": 365,
+        "source": "AI",
+        "miss_every": 23,
+    },
     "Helmet": {
         "serial_prefix": "HLM",
         "service_days": 1095,
         "source": "AI",
         "miss_every": 47,
     },
-    "Vest": {
-        "serial_prefix": "VST",
-        "service_days": 365,
+    "Mask": {
+        "serial_prefix": "MSK",
+        "service_days": 90,
         "source": "AI",
         "miss_every": 13,
     },
-    "Boots": {
-        "serial_prefix": "BTS",
+    "Shoes": {
+        "serial_prefix": "SHO",
         "service_days": 365,
         "source": "AI",
         "miss_every": 31,
@@ -44,7 +56,7 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
 
     today = datetime.now(timezone.utc).date()
     selected_worker_ids = {worker.worker_id for worker in workers}
-    selected_item_ids = {item.ppe_id for item in items.values()}
+    selected_item_ids = {item.ppe_id for item in all_items}
 
     # Reconcile data from older demo catalogs without touching live gate logs.
     demo_logs = db.query(ComplianceLog).filter(ComplianceLog.image_url.like("seed://ppe-history/%")).all()
@@ -78,9 +90,8 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
                 WorkerPpe.worker_id.notin_(selected_worker_ids),
             ).delete(synchronize_session=False)
             continue
-        db.query(PpeDetection).filter(PpeDetection.ppe_id == item.ppe_id).delete(synchronize_session=False)
-        db.query(WorkerPpe).filter(WorkerPpe.ppe_id == item.ppe_id).delete(synchronize_session=False)
-        db.delete(item)
+        # Keep historical categories that are no longer produced by the active
+        # model. They remain non-mandatory and retain their audit history.
 
     db.flush()
 

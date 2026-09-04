@@ -20,7 +20,7 @@ DEFAULT_WORKERS = [
 ]
 
 WORKER_SEED_KEY = "initial-demo-workers-v1"
-PPE_SEED_KEY = "ppe-demo-v2"
+PPE_SEED_KEY = "ppe-demo-v3-best2"
 
 
 def create_tables() -> None:
@@ -37,15 +37,22 @@ def _migrate_ppe_items() -> None:
         str(constraint.get("sqltext") or "")
         for constraint in inspector.get_check_constraints("ppe_items")
     )
-    if "description" not in columns and all(name in constraints for name in DEFAULT_PPE):
+    supported_table_names = (*DEFAULT_PPE, "Vest")
+    if "description" not in columns and all(name in constraints for name in supported_table_names):
         return
 
     aliases = {
         "Helmet": "Helmet",
         "Reflective Vest": "Vest",
         "Vest": "Vest",
-        "Safety Boots": "Boots",
-        "Boots": "Boots",
+        "Glove": "Gloves",
+        "Gloves": "Gloves",
+        "Goggles": "Goggles",
+        "Mask": "Mask",
+        "Safety Boots": "Shoes",
+        "Boots": "Shoes",
+        "Safety Shoes": "Shoes",
+        "Shoes": "Shoes",
     }
     has_assignments = inspector.has_table("worker_ppe")
     has_detections = inspector.has_table("ppe_detections")
@@ -57,7 +64,7 @@ def _migrate_ppe_items() -> None:
             rows = connection.exec_driver_sql(
                 "SELECT ppe_id, name FROM ppe_items ORDER BY ppe_id"
             ).mappings().all()
-            grouped: dict[str, list[dict]] = {name: [] for name in DEFAULT_PPE}
+            grouped: dict[str, list[dict]] = {name: [] for name in supported_table_names}
             unsupported: list[int] = []
             for row in rows:
                 canonical = aliases.get(row["name"])
@@ -75,10 +82,6 @@ def _migrate_ppe_items() -> None:
 
             for canonical, candidates in grouped.items():
                 if not candidates:
-                    connection.exec_driver_sql(
-                        "INSERT INTO ppe_items (name, is_mandatory) VALUES (:name, 1)",
-                        {"name": canonical},
-                    )
                     continue
                 survivor = next((row for row in candidates if row["name"] == canonical), candidates[0])
                 survivor_id = survivor["ppe_id"]
@@ -111,10 +114,6 @@ def _migrate_ppe_items() -> None:
                             {"duplicate_id": duplicate_id, "survivor_id": survivor_id},
                         )
                     connection.exec_driver_sql("DELETE FROM ppe_items WHERE ppe_id = :ppe_id", {"ppe_id": duplicate_id})
-                connection.exec_driver_sql(
-                    "UPDATE ppe_items SET name = :name, is_mandatory = 1 WHERE ppe_id = :ppe_id",
-                    {"name": canonical, "ppe_id": survivor_id},
-                )
 
             connection.exec_driver_sql(
                 "CREATE TABLE ppe_items_new ("
@@ -122,12 +121,26 @@ def _migrate_ppe_items() -> None:
                 "name VARCHAR(20) NOT NULL, "
                 "is_mandatory BOOLEAN NOT NULL, "
                 "created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, "
-                "CONSTRAINT ck_ppe_items_name CHECK (name IN ('Helmet', 'Vest', 'Boots')))"
+                "CONSTRAINT ck_ppe_items_name CHECK (name IN ('Gloves', 'Goggles', 'Helmet', 'Mask', 'Shoes', 'Vest')))"
             )
-            connection.exec_driver_sql(
-                "INSERT INTO ppe_items_new (ppe_id, name, is_mandatory, created_at) "
-                "SELECT ppe_id, name, is_mandatory, created_at FROM ppe_items"
-            )
+            for canonical, candidates in grouped.items():
+                if candidates:
+                    survivor = next((row for row in candidates if row["name"] == canonical), candidates[0])
+                    connection.exec_driver_sql(
+                        "INSERT INTO ppe_items_new (ppe_id, name, is_mandatory, created_at) "
+                        "SELECT ppe_id, :name, :is_mandatory, created_at FROM ppe_items WHERE ppe_id = :ppe_id",
+                        {
+                            "name": canonical,
+                            "is_mandatory": int(canonical in DEFAULT_PPE),
+                            "ppe_id": survivor["ppe_id"],
+                        },
+                    )
+            for canonical, candidates in grouped.items():
+                if canonical in DEFAULT_PPE and not candidates:
+                    connection.exec_driver_sql(
+                        "INSERT INTO ppe_items_new (name, is_mandatory) VALUES (:name, 1)",
+                        {"name": canonical},
+                    )
             connection.exec_driver_sql("DROP TABLE ppe_items")
             connection.exec_driver_sql("ALTER TABLE ppe_items_new RENAME TO ppe_items")
             connection.exec_driver_sql("CREATE UNIQUE INDEX ix_ppe_items_name ON ppe_items(name)")

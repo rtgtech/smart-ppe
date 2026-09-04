@@ -11,9 +11,20 @@ import cv2
 Box = list[float]
 HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
 LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
+LEFT_ELBOW, RIGHT_ELBOW = 7, 8
+LEFT_WRIST, RIGHT_WRIST = 9, 10
 LEFT_HIP, RIGHT_HIP = 11, 12
 LEFT_KNEE, RIGHT_KNEE = 13, 14
 LEFT_ANKLE, RIGHT_ANKLE = 15, 16
+
+PPE_ITEM_SPECS: dict[str, dict[str, Any]] = {
+    "glove": {"display_name": "Gloves", "regions": ("left_hand", "right_hand"), "pair": True},
+    "goggles": {"display_name": "Goggles", "regions": ("head",), "pair": False},
+    "helmet": {"display_name": "Helmet", "regions": ("head",), "pair": False},
+    "mask": {"display_name": "Mask", "regions": ("head",), "pair": False},
+    "shoes": {"display_name": "Shoes", "regions": ("left_shoe", "right_shoe"), "pair": True},
+}
+MODEL_PPE_CLASSES = frozenset(PPE_ITEM_SPECS) | frozenset(f"no_{label}" for label in PPE_ITEM_SPECS)
 
 
 def _area(box: Box) -> float:
@@ -176,8 +187,40 @@ def _body_regions(
         torso_source = "bbox"
         torso_confidence = 0.65 if full_body_visible else 0.0
 
-    boot_regions: dict[str, Box] = {}
-    boot_confidences: list[float] = []
+    hand_regions: dict[str, Box] = {}
+    hand_confidences: list[float] = []
+    for side, elbow_index, wrist_index, fallback_x1, fallback_x2 in (
+        ("left", LEFT_ELBOW, LEFT_WRIST, x1, x1 + person_width / 2),
+        ("right", RIGHT_ELBOW, RIGHT_WRIST, x1 + person_width / 2, x2),
+    ):
+        elbow = _point(keypoints, elbow_index, keypoint_threshold)
+        wrist = _point(keypoints, wrist_index, keypoint_threshold)
+        if elbow and wrist:
+            hand_regions[side] = _region(
+                [elbow, wrist], person_width * 0.12, person_height * 0.03,
+                person_height * 0.05, frame_width, frame_height,
+            )
+            hand_confidences.extend((elbow[2], wrist[2]))
+        else:
+            hand_regions[side] = _clamp(
+                [fallback_x1, y1 + person_height * 0.25, fallback_x2, y1 + person_height * 0.68],
+                frame_width,
+                frame_height,
+            )
+
+    hands_points_present = all(
+        _point(keypoints, index, keypoint_threshold)
+        for index in (LEFT_ELBOW, RIGHT_ELBOW, LEFT_WRIST, RIGHT_WRIST)
+    )
+    hands_source = "pose" if hands_points_present else "bbox"
+    hands_confidence = (
+        sum(hand_confidences) / len(hand_confidences)
+        if hands_points_present and hand_confidences
+        else 0.65 if full_body_visible else 0.0
+    )
+
+    shoe_regions: dict[str, Box] = {}
+    shoe_confidences: list[float] = []
     for side, knee_index, ankle_index, fallback_x1, fallback_x2 in (
         ("left", LEFT_KNEE, LEFT_ANKLE, x1, x1 + person_width / 2),
         ("right", RIGHT_KNEE, RIGHT_ANKLE, x1 + person_width / 2, x2),
@@ -185,12 +228,12 @@ def _body_regions(
         knee = _point(keypoints, knee_index, keypoint_threshold)
         ankle = _point(keypoints, ankle_index, keypoint_threshold)
         if knee and ankle:
-            boot_regions[side] = _region(
+            shoe_regions[side] = _region(
                 [knee, ankle], person_width * 0.10, person_height * 0.02, person_height * 0.08, frame_width, frame_height
             )
-            boot_confidences.extend((knee[2], ankle[2]))
+            shoe_confidences.extend((knee[2], ankle[2]))
         else:
-            boot_regions[side] = _clamp(
+            shoe_regions[side] = _clamp(
                 [fallback_x1, y1 + person_height * 0.68, fallback_x2, y2], frame_width, frame_height
             )
 
@@ -198,18 +241,20 @@ def _body_regions(
         _point(keypoints, index, keypoint_threshold)
         for index in (LEFT_KNEE, RIGHT_KNEE, LEFT_ANKLE, RIGHT_ANKLE)
     )
-    boots_source = "pose" if lower_points_present else "bbox"
-    boots_confidence = (
-        sum(boot_confidences) / len(boot_confidences)
-        if lower_points_present and boot_confidences
+    shoes_source = "pose" if lower_points_present else "bbox"
+    shoes_confidence = (
+        sum(shoe_confidences) / len(shoe_confidences)
+        if lower_points_present and shoe_confidences
         else 0.65 if full_body_visible else 0.0
     )
 
     return {
         "head": {"bbox": head, "source": head_source, "visible": head_confidence > 0 and _not_clipped(head, frame_width, frame_height), "visibility_confidence": round(head_confidence, 4)},
         "torso": {"bbox": torso, "source": torso_source, "visible": torso_confidence > 0 and _not_clipped(torso, frame_width, frame_height), "visibility_confidence": round(torso_confidence, 4)},
-        "left_boot": {"bbox": boot_regions["left"], "source": boots_source, "visible": boots_confidence > 0 and _not_clipped(boot_regions["left"], frame_width, frame_height), "visibility_confidence": round(boots_confidence, 4)},
-        "right_boot": {"bbox": boot_regions["right"], "source": boots_source, "visible": boots_confidence > 0 and _not_clipped(boot_regions["right"], frame_width, frame_height), "visibility_confidence": round(boots_confidence, 4)},
+        "left_hand": {"bbox": hand_regions["left"], "source": hands_source, "visible": hands_confidence > 0 and _not_clipped(hand_regions["left"], frame_width, frame_height), "visibility_confidence": round(hands_confidence, 4)},
+        "right_hand": {"bbox": hand_regions["right"], "source": hands_source, "visible": hands_confidence > 0 and _not_clipped(hand_regions["right"], frame_width, frame_height), "visibility_confidence": round(hands_confidence, 4)},
+        "left_shoe": {"bbox": shoe_regions["left"], "source": shoes_source, "visible": shoes_confidence > 0 and _not_clipped(shoe_regions["left"], frame_width, frame_height), "visibility_confidence": round(shoes_confidence, 4)},
+        "right_shoe": {"bbox": shoe_regions["right"], "source": shoes_source, "visible": shoes_confidence > 0 and _not_clipped(shoe_regions["right"], frame_width, frame_height), "visibility_confidence": round(shoes_confidence, 4)},
     }
 
 
@@ -222,17 +267,12 @@ def _association_candidates(
     candidates: list[tuple[float, int, str]] = []
     for person_index, person in enumerate(people):
         regions = person["rois"]
-        if label == "helmet":
-            names = ("head",)
-        elif label == "vest":
-            names = ("torso",)
-        else:
-            names = ("left_boot", "right_boot")
+        names = PPE_ITEM_SPECS[label]["regions"]
 
         scores = {name: _box_coverage(detection_box, regions[name]["bbox"]) for name in names}
-        if label == "boots" and all(score >= 0.15 for score in scores.values()):
+        if PPE_ITEM_SPECS[label]["pair"] and all(score >= 0.15 for score in scores.values()):
             combined_score = min(1.0, sum(scores.values()))
-            candidates.append((combined_score, person_index, "both_boots"))
+            candidates.append((combined_score, person_index, "both"))
             continue
         for name, score in scores.items():
             if score >= overlap_threshold and _center_inside(detection_box, regions[name]["bbox"]):
@@ -263,12 +303,14 @@ def analyze_compliance(
             min_height_ratio,
             frame_margin_ratio,
         )
-        person["associations"] = {"helmet": [], "vest": [], "boots": []}
+        person["associations"] = {label: [] for label in PPE_ITEM_SPECS}
 
     for detection in ppe_detections:
-        label = str(detection.get("label", "")).lower()
-        if label not in {"helmet", "vest", "boots"}:
+        model_label = str(detection.get("label", "")).lower()
+        if model_label not in MODEL_PPE_CLASSES:
             continue
+        is_negative = model_label.startswith("no_")
+        label = model_label.removeprefix("no_")
         candidates = _association_candidates(label, detection["bbox"], tracked, overlap_threshold)
         if not candidates:
             detection["worn"] = False
@@ -279,9 +321,16 @@ def analyze_compliance(
             "detection_confidence": float(detection["confidence"]),
             "association_score": round(score, 4),
             "region": region,
+            "is_negative": is_negative,
         }
         tracked[person_index]["associations"][label].append(association)
-        detection.update({"track_id": tracked[person_index]["track_id"], "region": region, "association_score": round(score, 4), "worn": True})
+        detection.update({
+            "track_id": tracked[person_index]["track_id"],
+            "ppe_item": label,
+            "region": region,
+            "association_score": round(score, 4),
+            "worn": not is_negative,
+        })
 
     results: list[dict[str, Any]] = []
     for person in tracked:
@@ -293,45 +342,46 @@ def analyze_compliance(
             "associations": person["associations"],
         }
         item_states: list[str] = []
-        for label, region_name in (("helmet", "head"), ("vest", "torso")):
+        for label, spec in PPE_ITEM_SPECS.items():
             associations = person["associations"][label]
-            if associations:
-                best = max(associations, key=lambda row: row["detection_confidence"] * row["association_score"])
+            negative = [row for row in associations if row["is_negative"]]
+            positive = [row for row in associations if not row["is_negative"]]
+            regions = spec["regions"]
+
+            if negative:
+                best = max(negative, key=lambda row: row["detection_confidence"] * row["association_score"])
+                state = "NO"
+                confidence = best["detection_confidence"] * best["association_score"]
+            elif spec["pair"]:
+                matched_regions: set[str] = set()
+                for association in positive:
+                    if association["region"] == "both":
+                        matched_regions.update(regions)
+                    else:
+                        matched_regions.add(association["region"])
+                if set(regions).issubset(matched_regions):
+                    state = "YES"
+                    confidence = min(
+                        row["detection_confidence"] * row["association_score"] for row in positive
+                    )
+                elif all(person["rois"][name]["visible"] for name in regions):
+                    state = "NO"
+                    confidence = min(person["rois"][name]["visibility_confidence"] for name in regions)
+                else:
+                    state, confidence = "UNKNOWN", 0.0
+            elif positive:
+                best = max(positive, key=lambda row: row["detection_confidence"] * row["association_score"])
                 state = "YES"
                 confidence = best["detection_confidence"] * best["association_score"]
-            elif person["rois"][region_name]["visible"]:
+            elif all(person["rois"][name]["visible"] for name in regions):
                 state = "NO"
-                confidence = person["rois"][region_name]["visibility_confidence"]
+                confidence = min(person["rois"][name]["visibility_confidence"] for name in regions)
             else:
                 state, confidence = "UNKNOWN", 0.0
+
             result[label] = state
             result[f"{label}_confidence"] = round(confidence, 4)
             item_states.append(state)
-
-        boot_associations = person["associations"]["boots"]
-        matched_sides: set[str] = set()
-        for association in boot_associations:
-            if association["region"] == "both_boots":
-                matched_sides.update(("left_boot", "right_boot"))
-            else:
-                matched_sides.add(association["region"])
-        if {"left_boot", "right_boot"}.issubset(matched_sides):
-            result["boots"] = "YES"
-            result["boots_confidence"] = round(
-                min(row["detection_confidence"] * row["association_score"] for row in boot_associations), 4
-            )
-        elif person["rois"]["left_boot"]["visible"] and person["rois"]["right_boot"]["visible"]:
-            result["boots"] = "NO"
-            result["boots_confidence"] = round(
-                min(
-                    person["rois"]["left_boot"]["visibility_confidence"],
-                    person["rois"]["right_boot"]["visibility_confidence"],
-                ),
-                4,
-            )
-        else:
-            result["boots"], result["boots_confidence"] = "UNKNOWN", 0.0
-        item_states.append(result["boots"])
 
         result["status"] = "VIOLATION" if "NO" in item_states else "COMPLIANT" if all(state == "YES" for state in item_states) else "UNKNOWN"
         results.append(result)
@@ -340,22 +390,28 @@ def analyze_compliance(
 
 def annotate_compliance(image: Any, people: list[dict[str, Any]], detections: list[dict[str, Any]] | None = None) -> Any:
     colors = {"COMPLIANT": (70, 220, 90), "VIOLATION": (40, 40, 235), "UNKNOWN": (0, 190, 255)}
-    roi_colors = {"head": (255, 200, 0), "torso": (255, 100, 180), "left_boot": (200, 160, 80), "right_boot": (200, 160, 80)}
+    roi_colors = {
+        "head": (255, 200, 0), "torso": (255, 100, 180),
+        "left_hand": (180, 120, 255), "right_hand": (180, 120, 255),
+        "left_shoe": (200, 160, 80), "right_shoe": (200, 160, 80),
+    }
     for person in people:
         color = colors[person["status"]]
         x1, y1, x2, y2 = (int(value) for value in person["bbox"])
         cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
-        label = f"ID {person['track_id']} {person['status']} H:{person['helmet']} V:{person['vest']} B:{person['boots']}"
+        state_label = " ".join(f"{name[0].upper()}:{person[name]}" for name in PPE_ITEM_SPECS)
+        label = f"ID {person['track_id']} {person['status']} {state_label}"
         cv2.putText(image, label, (x1, max(18, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 2, cv2.LINE_AA)
         for name, region in person["rois"].items():
             rx1, ry1, rx2, ry2 = (int(value) for value in region["bbox"])
             cv2.rectangle(image, (rx1, ry1), (rx2, ry2), roi_colors[name], 1)
     for detection in detections or []:
-        if str(detection.get("label", "")).lower() not in {"helmet", "vest", "boots"}:
+        if str(detection.get("label", "")).lower() not in MODEL_PPE_CLASSES:
             continue
-        color = (70, 220, 90) if detection.get("worn") else (130, 130, 130)
+        is_negative = str(detection.get("label", "")).lower().startswith("no_")
+        color = (40, 40, 235) if is_negative else (70, 220, 90) if detection.get("worn") else (130, 130, 130)
         x1, y1, x2, y2 = (int(value) for value in detection["bbox"])
-        suffix = f"worn by {detection['track_id']}" if detection.get("worn") else "not worn"
+        suffix = f"person {detection['track_id']}" if detection.get("track_id") else "unassigned"
         cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
         cv2.putText(image, f"{detection['label']} {suffix}", (x1, max(18, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
     return image

@@ -80,14 +80,14 @@ class EntryDecisionTest(unittest.TestCase):
         self.assertEqual(event.verdict, "ALLOWED")
         self.assertEqual(self.db.query(ComplianceLog).count(), 1)
         self.assertEqual(self.db.query(AttendanceLog).count(), 1)
-        self.assertEqual(self.db.query(PpeDetection).count(), 3)
+        self.assertEqual(self.db.query(PpeDetection).count(), len(REQUIRED))
         self.assertEqual(self.db.query(Alert).count(), 0)
-        self.assertEqual(self.db.query(AuditLog).count(), 6)
+        self.assertEqual(self.db.query(AuditLog).count(), len(REQUIRED) + 3)
         _evaluate(self.db, event, force=True)
         self.db.commit()
         self.assertEqual(self.db.query(ComplianceLog).count(), 1)
         self.assertEqual(self.db.query(AttendanceLog).count(), 1)
-        self.assertEqual(self.db.query(AuditLog).count(), 6)
+        self.assertEqual(self.db.query(AuditLog).count(), len(REQUIRED) + 3)
 
     def test_qr_is_not_required_for_known_worker(self):
         event = self.event([self.frame() for _ in range(5)])
@@ -112,7 +112,7 @@ class EntryDecisionTest(unittest.TestCase):
         _evaluate(self.db, event, force=True)
         self.db.commit()
         detections = self.db.query(PpeDetection).filter(PpeDetection.detection_source == "AI").all()
-        self.assertEqual(len(detections), 3)
+        self.assertEqual(len(detections), len(REQUIRED))
         self.assertTrue(all(row.assignment_result == "YES" for row in detections))
         stored = json.loads(detections[0].bounding_box)
         self.assertEqual(stored["track_id"], 7)
@@ -173,7 +173,7 @@ class EntryDecisionTest(unittest.TestCase):
         self.assertEqual(self.db.query(AttendanceLog).count(), 0)
 
     def test_ppe_catalog_rejects_noncanonical_names(self):
-        self.db.add(PpeItem(name="Gloves", is_mandatory=True))
+        self.db.add(PpeItem(name="Boots", is_mandatory=True))
         with self.assertRaises(IntegrityError):
             self.db.commit()
         self.db.rollback()
