@@ -10,7 +10,7 @@ export default function ComplianceCheck() {
   const Icon = allowed ? ShieldCheck : denied ? ShieldX : AlertTriangle;
   return (
     <aside className="panel flex flex-col p-5 sm:p-6">
-      <div className="label-op">Verdict · 3 of 3</div>
+      <div className="label-op">Verdict · 2 of 2</div>
       <div className={`my-6 rounded-lg border p-5 ${tone}`}>
         <div className="flex items-center gap-3"><Icon size={34} /><div><div className="text-2xl font-extrabold">{verdict || 'HOLD'}</div><div className="mt-1 text-xs text-textSecondary">Barrier {entry?.interventions?.barrier || 'LOCKED'} · {entry?.interventions?.indicator || 'AMBER'}</div></div></div>
       </div>

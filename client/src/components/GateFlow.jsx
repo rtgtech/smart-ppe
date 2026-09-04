@@ -2,9 +2,8 @@ import { Check, Mountain } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const STEPS = [
-  { number: 1, label: 'Identity', path: '/entry/biometric' },
-  { number: 2, label: 'Equipment', path: '/entry/scan-ppe' },
-  { number: 3, label: 'Compliance', path: '/entry/compliance' },
+  { number: 1, label: 'Verification', path: '/entry/biometric' },
+  { number: 2, label: 'Verdict', path: '/entry/compliance' },
 ];
 
 export default function GateFlow({ step, children }) {
@@ -18,7 +17,7 @@ export default function GateFlow({ step, children }) {
             <span className="text-sm font-extrabold tracking-tight">SURAKSHA</span>
             <span className="hidden border-l border-border pl-3 label-op sm:inline">Gate entry</span>
           </button>
-          <div className="flex items-center gap-1 sm:gap-3" aria-label={`Step ${step} of 3`}>
+          <div className="flex items-center gap-1 sm:gap-3" aria-label={`Step ${step} of 2`}>
             {STEPS.map((item, index) => (
               <div key={item.number} className="flex items-center gap-1 sm:gap-3">
                 {index > 0 && <span className={`h-px w-3 sm:w-8 ${step >= item.number ? 'bg-safety' : 'bg-border'}`} />}

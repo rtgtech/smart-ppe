@@ -16,12 +16,11 @@ export default function EntryLayout() {
   const [error, setError] = useState('');
   const audioRef = useRef(null);
 
-  const step = location.pathname.endsWith('/scan-ppe') ? 2 : location.pathname.endsWith('/compliance') ? 3 : 1;
+  const step = location.pathname.endsWith('/compliance') ? 2 : 1;
 
   const routeFor = useCallback((next) => {
     if (!next) return;
     if (next.lifecycle === 'FINALIZED') navigate('/entry/compliance', { replace: true });
-    else if (next.phase === 'EVIDENCE') navigate('/entry/scan-ppe', { replace: true });
     else navigate('/entry/biometric', { replace: true });
   }, [navigate]);
 

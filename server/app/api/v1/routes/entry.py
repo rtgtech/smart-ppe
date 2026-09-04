@@ -218,46 +218,11 @@ def _summarize(db: Session, event: GateEvent, state: dict[str, Any]) -> tuple[di
             visual_confidences.append(confidence)
         visual[item] = {"state": status, "positive_frames": len(positives), "negative_frames": negatives, "confidence": confidence}
 
-    qr_counts = Counter(code for frame in frames for code in frame.get("qr_codes", []))
-    maximums = state.setdefault("qr_max_counts", {})
-    for code, count in qr_counts.items():
-        maximums[code] = max(int(maximums.get(code, 0)), count)
-    confirmed = state.setdefault("qr_confirmed", {})
-    failures = state.setdefault("qr_failures", {})
-    if worker:
-        for code, count in maximums.items():
-            if count < CONFIRM:
-                continue
-            try:
-                normalized = str(uuid.UUID(code))
-            except ValueError:
-                continue
-            assignment = db.get(WorkerPpe, normalized)
-            if assignment is None:
-                failures[normalized] = {"identifier": normalized, "assignment_result": "UNREGISTERED"}
-            elif assignment.worker_id != worker.worker_id:
-                failures[normalized] = {"identifier": normalized, "assignment_result": "OTHER_WORKER", "worker_id": assignment.worker_id}
-            else:
-                confirmed[assignment.ppe_item.name] = {"identifier": normalized, "assignment_result": "MATCH", "worker_id": worker.worker_id}
-
-    assigned_ids: dict[str, set[str]] = {name: set() for name in REQUIRED}
-    if worker:
-        for assignment in db.query(WorkerPpe).filter(WorkerPpe.worker_id == worker.worker_id).all():
-            if assignment.ppe_item.name in assigned_ids:
-                assigned_ids[assignment.ppe_item.name].add(assignment.worker_ppe_id)
-    qr = {}
-    for item in REQUIRED:
-        if item in confirmed:
-            qr[item] = {"state": "CONFIRMED", **confirmed[item], "max_frames": maximums.get(confirmed[item]["identifier"], 0)}
-        else:
-            max_seen = max((maximums.get(code, 0) for code in assigned_ids[item]), default=0)
-            qr[item] = {"state": "UNSTABLE" if max_seen else "NOT_SEEN", "max_frames": max_seen, "assignment_result": "NOT_SEEN"}
-
     identity_confidence = statistics.median(matches.get(candidate, [])) * 100 if worker else None
     summary = {
         "identity": {"state": "CONFIRMED" if worker else "UNSTABLE", "supporting_frames": len(matches.get(candidate, [])), "confidence": identity_confidence},
         "framing": {"state": "CONFIRMED" if framing_count >= CONFIRM else "UNSTABLE", "supporting_frames": framing_count},
-        "visual": visual, "qr": qr, "qr_failures": list(failures.values()), "frames_in_window": len(frames),
+        "visual": visual, "frames_in_window": len(frames),
     }
     state["summary"] = summary
     event.identity_confidence = round(identity_confidence, 1) if identity_confidence is not None else None
@@ -265,7 +230,6 @@ def _summarize(db: Session, event: GateEvent, state: dict[str, Any]) -> tuple[di
     event.ppe_confidence = round((min(visual_confidences) if len(visual_confidences) == len(REQUIRED) else min(visual_support)) * 100, 1)
     ratios = [len(matches.get(candidate, [])) / WINDOW if candidate else 0, framing_count / WINDOW]
     ratios.extend(max(visual[item]["positive_frames"], visual[item]["negative_frames"]) / WINDOW for item in REQUIRED)
-    ratios.extend(min(1, qr[item]["max_frames"] / CONFIRM) for item in REQUIRED)
     event.evidence_confidence = round(min(ratios) * 100, 1)
     return summary, worker
 
@@ -277,7 +241,7 @@ def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None
     event.lifecycle, event.phase, event.verdict, event.finalized_at = "FINALIZED", "FINAL", verdict, now
     event.worker_id = worker.worker_id if worker else None
     event.reasons_json = _dump(reasons)
-    event.qr_results_json = _dump(list(summary["qr"].values()) + summary.get("qr_failures", []))
+    event.qr_results_json = _dump([])
     event.interventions_json = _dump({
         "barrier": "UNLOCKED" if verdict == "ALLOWED" else "LOCKED",
         "indicator": "GREEN" if verdict == "ALLOWED" else "RED" if verdict == "DENIED" else "AMBER",
@@ -292,11 +256,11 @@ def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None
     item_by_name = {item.name: item for item in items}
     if worker:
         visual_passes = sum(summary["visual"][name]["state"] == "CONFIRMED" for name in REQUIRED)
-        qr_passes = sum(summary["qr"][name]["state"] == "CONFIRMED" for name in REQUIRED)
+        compliance_score = round(visual_passes * 100 / len(REQUIRED), 1)
         log = ComplianceLog(
             event_id=event.event_id, final_verdict=verdict, worker_id=worker.worker_id, gate_id=event.gate_id,
             entry_time=event.edge_timestamp, overall_status="COMPLIANT" if verdict == "ALLOWED" else "DENIED" if verdict == "DENIED" else "NON_COMPLIANT",
-            compliance_score=round((visual_passes + qr_passes) * 100 / 6, 1), confidence_score=event.evidence_confidence,
+            compliance_score=compliance_score, confidence_score=event.evidence_confidence,
             latitude=event.gate_latitude, longitude=event.gate_longitude, offline_flag=event.offline_flag, sync_status=event.sync_status,
         )
         db.add(log)
@@ -306,9 +270,14 @@ def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None
             if not item:
                 continue
             visual = summary["visual"][name]
-            qr = summary["qr"][name]
-            db.add(PpeDetection(log_id=log.log_id, ppe_id=item.ppe_id, detected=visual["state"] == "CONFIRMED", confidence_score=(visual["confidence"] or 0) * 100 if visual["confidence"] is not None else None, detection_source="AI", evidence_state=visual["state"]))
-            db.add(PpeDetection(log_id=log.log_id, ppe_id=item.ppe_id, detected=qr["state"] == "CONFIRMED", confidence_score=min(100, qr["max_frames"] * 100 / CONFIRM), detection_source="QR", evidence_state=qr["state"], observed_identifier=qr.get("identifier"), assignment_result=qr.get("assignment_result")))
+            db.add(PpeDetection(
+                log_id=log.log_id,
+                ppe_id=item.ppe_id,
+                detected=visual["state"] == "CONFIRMED",
+                confidence_score=(visual["confidence"] or 0) * 100 if visual["confidence"] is not None else None,
+                detection_source="AI",
+                evidence_state=visual["state"]
+            ))
         if verdict == "ALLOWED":
             db.add(AttendanceLog(event_id=event.event_id, worker_id=worker.worker_id, gate_id=event.gate_id, entry_time=event.edge_timestamp, status="INSIDE"))
 
@@ -333,15 +302,13 @@ def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None
 def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
     if event.lifecycle == "FINALIZED":
         return True
-    state = _load(event.evidence_json, {"frames": [], "qr_max_counts": {}, "qr_confirmed": {}, "qr_failures": {}})
+    state = _load(event.evidence_json, {"frames": []})
     summary, worker = _summarize(db, event, state)
     now = _now()
     if state.get("subject_started_at") and not state.get("identity_deadline"):
         state["identity_deadline"] = (_aware(datetime.fromisoformat(state["subject_started_at"])) + timedelta(seconds=settings.entry_identity_timeout_seconds)).isoformat()
-    if worker and event.phase == "IDENTITY":
-        event.phase = "EVIDENCE"
+    if worker:
         event.worker_id = worker.worker_id
-        state["evidence_deadline"] = (now + timedelta(seconds=settings.entry_evidence_timeout_seconds)).isoformat()
 
     reasons: list[str] = []
     framing_ok = summary["framing"]["state"] == "CONFIRMED"
@@ -349,22 +316,15 @@ def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
         for name, value in summary["visual"].items():
             if value["state"] == "MISSING":
                 reasons.append(f"{REQUIRED[name].upper()}_VISUALLY_MISSING")
-        for failure in summary.get("qr_failures", []):
-            reasons.append("PPE_ASSIGNED_TO_OTHER_WORKER" if failure["assignment_result"] == "OTHER_WORKER" else "UNREGISTERED_PPE_QR")
         if reasons:
             _finalize(db, event, "DENIED", worker, sorted(set(reasons)), summary, state)
             return True
-        if all(summary["visual"][name]["state"] == "CONFIRMED" and summary["qr"][name]["state"] == "CONFIRMED" for name in REQUIRED):
+        if all(summary["visual"][name]["state"] == "CONFIRMED" for name in REQUIRED):
             _finalize(db, event, "ALLOWED", worker, [], summary, state)
             return True
 
     identity_deadline = datetime.fromisoformat(state["identity_deadline"]) if state.get("identity_deadline") else None
-    evidence_deadline = datetime.fromisoformat(state["evidence_deadline"]) if state.get("evidence_deadline") else None
-    expired = (
-        event.phase == "EVIDENCE" and evidence_deadline is not None and now >= _aware(evidence_deadline)
-    ) or (
-        event.phase == "IDENTITY" and identity_deadline is not None and now >= _aware(identity_deadline)
-    )
+    expired = identity_deadline is not None and now >= _aware(identity_deadline)
     if not expired and not force:
         event.evidence_json = _dump(state)
         return False
@@ -377,7 +337,7 @@ def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
             reasons.append("UNKNOWN_FACE")
         else:
             reasons.append("UNSTABLE_IDENTITY")
-        previously_confirmed = db.get(Worker, event.worker_id) if event.worker_id and event.phase == "EVIDENCE" else None
+        previously_confirmed = db.get(Worker, event.worker_id) if event.worker_id else None
         _finalize(db, event, "HOLD", previously_confirmed, reasons, summary, state)
         return True
     if not framing_ok:
@@ -385,13 +345,13 @@ def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
     for name in REQUIRED:
         if summary["visual"][name]["state"] == "UNSTABLE":
             reasons.append(f"{REQUIRED[name].upper()}_VISUAL_UNSTABLE")
-        if summary["qr"][name]["state"] == "NOT_SEEN":
-            reasons.append(f"{REQUIRED[name].upper()}_QR_MISSING")
-        elif summary["qr"][name]["state"] == "UNSTABLE":
-            reasons.append(f"{REQUIRED[name].upper()}_QR_UNSTABLE")
-    verdict = "DENIED" if framing_ok and any(reason.endswith("_QR_MISSING") for reason in reasons) else "HOLD"
+        elif summary["visual"][name]["state"] == "MISSING":
+            reasons.append(f"{REQUIRED[name].upper()}_VISUALLY_MISSING")
+    missing_ppe = any(reason.endswith("_MISSING") for reason in reasons)
+    verdict = "DENIED" if (framing_ok and missing_ppe) else "HOLD"
     _finalize(db, event, verdict, worker, reasons, summary, state)
     return True
+
 
 
 @router.post("/attempts", status_code=201)

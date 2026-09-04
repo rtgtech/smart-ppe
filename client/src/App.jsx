@@ -19,7 +19,6 @@ import Settings from './pages/Settings';
 import SettingsPpe from './pages/SettingsPpe';
 import SettingsUsers from './pages/SettingsUsers';
 import Biometric from './pages/Biometric';
-import ScanPpe from './pages/ScanPpe';
 import ComplianceCheck from './pages/ComplianceCheck';
 
 function Shelled(Page) {
@@ -39,7 +38,6 @@ export default function App() {
         <Route path="/entry" element={<EntryLayout />}>
           <Route index element={<Navigate to="biometric" replace />} />
           <Route path="biometric" element={<Biometric />} />
-          <Route path="scan-ppe" element={<ScanPpe />} />
           <Route path="compliance" element={<ComplianceCheck />} />
         </Route>
 
