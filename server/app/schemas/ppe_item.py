@@ -1,12 +1,13 @@
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel
 
 from app.schemas.common import OrmModel, datetime
 
 
 class PpeItemBase(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    description: str | None = None
-    is_mandatory: bool = True
+    name: Literal["Helmet", "Vest", "Boots"]
+    is_mandatory: Literal[True] = True
 
 
 class PpeItemCreate(PpeItemBase):
@@ -14,9 +15,8 @@ class PpeItemCreate(PpeItemBase):
 
 
 class PpeItemUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
-    description: str | None = None
-    is_mandatory: bool | None = None
+    name: Literal["Helmet", "Vest", "Boots"] | None = None
+    is_mandatory: Literal[True] | None = None
 
 
 class PpeItemRead(PpeItemBase, OrmModel):

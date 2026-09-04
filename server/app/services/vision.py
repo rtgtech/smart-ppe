@@ -304,34 +304,20 @@ def infer_frame(
     has_helmet = "helmet" in detected_classes and "no_helmet" not in detected_classes
     has_boots = "boots" in detected_classes and "no_boots" not in detected_classes
     has_vest = "vest" in detected_classes
-    has_gloves = "gloves" in detected_classes and "no_gloves" not in detected_classes
-    has_goggles = (
-        "goggles" in detected_classes
-        and "no_goggle" not in detected_classes
-        and "no_goggles" not in detected_classes
-    )
-
-    # Cap lamp is treated as attached to a valid helmet.
-    has_cap_lamp = has_helmet
 
     ppe_status = {
         "helmet": has_helmet,
-        "capLamp": has_cap_lamp,
         "safetyBoots": has_boots,
         "reflectiveVest": has_vest,
-        "gloves": has_gloves,
-        "goggles": has_goggles,
     }
 
     missing_items: list[str] = []
     if not has_helmet:
         missing_items.append("Helmet")
-    if not has_cap_lamp:
-        missing_items.append("Cap Lamp")
     if not has_boots:
-        missing_items.append("Safety Boots")
+        missing_items.append("Boots")
     if not has_vest:
-        missing_items.append("Reflective Vest")
+        missing_items.append("Vest")
 
     # Face recognition runs on the original image while annotation is layered
     # on top of the YOLO-rendered frame.

@@ -9,7 +9,7 @@ from app.db.session import engine
 from app.db.seed_ppe_data import PPE_CATALOG, seed_ppe_demo_data
 
 
-DEFAULT_PPE = [(name, details["description"]) for name, details in PPE_CATALOG.items()]
+DEFAULT_PPE = tuple(PPE_CATALOG)
 
 DEFAULT_WORKERS = [
     ("WK10234", "Ramesh Kumar", "Mining", 92, "HIGH", 7),
@@ -25,6 +25,121 @@ PPE_SEED_KEY = "ppe-demo-v2"
 
 def create_tables() -> None:
     Base.metadata.create_all(bind=engine)
+
+
+def _migrate_ppe_items() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("ppe_items"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("ppe_items")}
+    constraints = " ".join(
+        str(constraint.get("sqltext") or "")
+        for constraint in inspector.get_check_constraints("ppe_items")
+    )
+    if "description" not in columns and all(name in constraints for name in DEFAULT_PPE):
+        return
+
+    aliases = {
+        "Helmet": "Helmet",
+        "Reflective Vest": "Vest",
+        "Vest": "Vest",
+        "Safety Boots": "Boots",
+        "Boots": "Boots",
+    }
+    has_assignments = inspector.has_table("worker_ppe")
+    has_detections = inspector.has_table("ppe_detections")
+
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        try:
+            rows = connection.exec_driver_sql(
+                "SELECT ppe_id, name FROM ppe_items ORDER BY ppe_id"
+            ).mappings().all()
+            grouped: dict[str, list[dict]] = {name: [] for name in DEFAULT_PPE}
+            unsupported: list[int] = []
+            for row in rows:
+                canonical = aliases.get(row["name"])
+                if canonical is None:
+                    unsupported.append(row["ppe_id"])
+                else:
+                    grouped[canonical].append(dict(row))
+
+            for ppe_id in unsupported:
+                if has_detections:
+                    connection.exec_driver_sql("DELETE FROM ppe_detections WHERE ppe_id = :ppe_id", {"ppe_id": ppe_id})
+                if has_assignments:
+                    connection.exec_driver_sql("DELETE FROM worker_ppe WHERE ppe_id = :ppe_id", {"ppe_id": ppe_id})
+                connection.exec_driver_sql("DELETE FROM ppe_items WHERE ppe_id = :ppe_id", {"ppe_id": ppe_id})
+
+            for canonical, candidates in grouped.items():
+                if not candidates:
+                    connection.exec_driver_sql(
+                        "INSERT INTO ppe_items (name, is_mandatory) VALUES (:name, 1)",
+                        {"name": canonical},
+                    )
+                    continue
+                survivor = next((row for row in candidates if row["name"] == canonical), candidates[0])
+                survivor_id = survivor["ppe_id"]
+                for duplicate in candidates:
+                    duplicate_id = duplicate["ppe_id"]
+                    if duplicate_id == survivor_id:
+                        continue
+                    if has_detections:
+                        connection.exec_driver_sql(
+                            "DELETE FROM ppe_detections AS duplicate WHERE duplicate.ppe_id = :duplicate_id "
+                            "AND EXISTS (SELECT 1 FROM ppe_detections AS existing "
+                            "WHERE existing.log_id = duplicate.log_id AND existing.ppe_id = :survivor_id "
+                            "AND existing.detection_source = duplicate.detection_source)",
+                            {"duplicate_id": duplicate_id, "survivor_id": survivor_id},
+                        )
+                        connection.exec_driver_sql(
+                            "UPDATE ppe_detections SET ppe_id = :survivor_id WHERE ppe_id = :duplicate_id",
+                            {"duplicate_id": duplicate_id, "survivor_id": survivor_id},
+                        )
+                    if has_assignments:
+                        connection.exec_driver_sql(
+                            "DELETE FROM worker_ppe AS duplicate WHERE duplicate.ppe_id = :duplicate_id "
+                            "AND duplicate.serial_number IS NOT NULL AND EXISTS (SELECT 1 FROM worker_ppe AS existing "
+                            "WHERE existing.worker_id = duplicate.worker_id AND existing.ppe_id = :survivor_id "
+                            "AND existing.serial_number = duplicate.serial_number)",
+                            {"duplicate_id": duplicate_id, "survivor_id": survivor_id},
+                        )
+                        connection.exec_driver_sql(
+                            "UPDATE worker_ppe SET ppe_id = :survivor_id WHERE ppe_id = :duplicate_id",
+                            {"duplicate_id": duplicate_id, "survivor_id": survivor_id},
+                        )
+                    connection.exec_driver_sql("DELETE FROM ppe_items WHERE ppe_id = :ppe_id", {"ppe_id": duplicate_id})
+                connection.exec_driver_sql(
+                    "UPDATE ppe_items SET name = :name, is_mandatory = 1 WHERE ppe_id = :ppe_id",
+                    {"name": canonical, "ppe_id": survivor_id},
+                )
+
+            connection.exec_driver_sql(
+                "CREATE TABLE ppe_items_new ("
+                "ppe_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                "name VARCHAR(20) NOT NULL, "
+                "is_mandatory BOOLEAN NOT NULL, "
+                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL, "
+                "CONSTRAINT ck_ppe_items_name CHECK (name IN ('Helmet', 'Vest', 'Boots')))"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO ppe_items_new (ppe_id, name, is_mandatory, created_at) "
+                "SELECT ppe_id, name, is_mandatory, created_at FROM ppe_items"
+            )
+            connection.exec_driver_sql("DROP TABLE ppe_items")
+            connection.exec_driver_sql("ALTER TABLE ppe_items_new RENAME TO ppe_items")
+            connection.exec_driver_sql("CREATE UNIQUE INDEX ix_ppe_items_name ON ppe_items(name)")
+            violations = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
+            if violations:
+                raise RuntimeError(f"PPE migration produced foreign-key violations: {violations}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 
 def migrate_entry_schema() -> None:
@@ -78,6 +193,8 @@ def migrate_entry_schema() -> None:
             connection.exec_driver_sql("DROP TABLE ppe_detections_legacy")
             connection.commit()
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+
+    _migrate_ppe_items()
 
     additions = {
         "compliance_logs": [
@@ -164,10 +281,10 @@ def seed_initial_data(db: Session) -> None:
         db.delete(legacy_department)
     db.flush()
 
-    for ppe_name, description in DEFAULT_PPE:
+    for ppe_name in DEFAULT_PPE:
         exists = db.query(PpeItem).filter(PpeItem.name == ppe_name).one_or_none()
         if exists is None:
-            db.add(PpeItem(name=ppe_name, description=description, is_mandatory=True))
+            db.add(PpeItem(name=ppe_name, is_mandatory=True))
 
     gate = db.query(Gate).filter(Gate.mine_id == mine.mine_id, Gate.name == "Gate 01").one_or_none()
     if gate is None:

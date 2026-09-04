@@ -6,9 +6,8 @@ import AnnotatedVisionFeed from '../components/AnnotatedVisionFeed';
 
 const PPE_LABELS = {
   helmet: 'Helmet',
-  capLamp: 'Cap Lamp',
-  safetyBoots: 'Safety Boots',
-  reflectiveVest: 'Reflective Vest',
+  safetyBoots: 'Boots',
+  reflectiveVest: 'Vest',
 };
 
 export default function Live() {

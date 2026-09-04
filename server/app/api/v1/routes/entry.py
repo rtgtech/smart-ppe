@@ -25,7 +25,7 @@ from app.services.vision import MAX_FRAME_BYTES, decode_jpeg, infer_frame, visio
 
 router = APIRouter(prefix="/entry", tags=["entry"])
 settings = get_settings()
-REQUIRED = {"Helmet": "helmet", "Reflective Vest": "vest", "Safety Boots": "boots"}
+REQUIRED = {"Helmet": "helmet", "Vest": "vest", "Boots": "boots"}
 WINDOW = 5
 CONFIRM = 3
 _event_locks: dict[str, asyncio.Lock] = {}
@@ -64,6 +64,15 @@ def _device(db: Session) -> Device:
     if device.gate.latitude is None or device.gate.longitude is None:
         raise HTTPException(503, "The configured gate coordinates are required")
     return device
+
+
+def _require_ppe_catalog(db: Session) -> None:
+    configured = {
+        item.name
+        for item in db.query(PpeItem).filter(PpeItem.is_mandatory.is_(True)).all()
+    }
+    if configured != set(REQUIRED):
+        raise HTTPException(503, "Helmet, Vest, and Boots must be configured as mandatory PPE")
 
 
 def _event_dict(event: GateEvent) -> dict[str, Any]:
@@ -397,6 +406,7 @@ def create_attempt(idempotency_key: str = Header(..., alias="Idempotency-Key"), 
     if existing:
         return _event_dict(existing)
     device = _device(db)
+    _require_ppe_catalog(db)
     event = GateEvent(
         event_id=event_id, gate_id=device.gate_id, device_id=device.device_id,
         gate_latitude=device.gate.latitude, gate_longitude=device.gate.longitude,

@@ -141,7 +141,7 @@ class WorkerDeletionTest(unittest.IsolatedAsyncioTestCase):
         session.flush()
         department = Department(mine_id=mine.mine_id, name="Test Department")
         gate = Gate(mine_id=mine.mine_id, name="Test Gate", location="Test", status="ACTIVE")
-        ppe = PpeItem(name="Test Helmet", is_mandatory=True)
+        ppe = PpeItem(name="Helmet", is_mandatory=True)
         session.add_all([department, gate, ppe])
         session.flush()
         worker = Worker(employee_code="DELETE_TEST", name="Delete Test", department_id=department.department_id)

@@ -6,11 +6,8 @@
 
 export const PPE_ITEMS = [
   { key: 'helmet', label: 'Helmet', compliance: 98, trend: +0.4, violations: 21 },
-  { key: 'capLamp', label: 'Cap Lamp', compliance: 96, trend: +0.1, violations: 34 },
-  { key: 'safetyBoots', label: 'Safety Boots', compliance: 94, trend: -0.6, violations: 52 },
-  { key: 'reflectiveVest', label: 'Reflective Vest', compliance: 97, trend: +0.2, violations: 27 },
-  { key: 'gasDetector', label: 'Gas Detector', compliance: 91, trend: -1.4, violations: 68 },
-  { key: 'selfRescuer', label: 'Self-Rescuer', compliance: 93, trend: -0.3, violations: 41 },
+  { key: 'safetyBoots', label: 'Boots', compliance: 94, trend: -0.6, violations: 52 },
+  { key: 'reflectiveVest', label: 'Vest', compliance: 97, trend: +0.2, violations: 27 },
 ];
 
 export const GATES = [
@@ -36,11 +33,11 @@ export const WORKERS = [
 export const workerById = (id) => WORKERS.find((w) => w.id === id);
 
 export const RECENT_EVENTS = [
-  { time: '10:32:14', worker: 'Ramesh Kumar', workerId: 'WK10234', issue: 'Safety Boots Missing', gate: 'GATE 02', decision: 'ENTRY DENIED', severity: 'critical' },
-  { time: '10:28:41', worker: 'Sanjay Singh', workerId: 'WK10209', issue: 'Gas Detector Missing', gate: 'GATE 01', decision: 'ENTRY DENIED', severity: 'critical' },
+  { time: '10:32:14', worker: 'Ramesh Kumar', workerId: 'WK10234', issue: 'Boots Missing', gate: 'GATE 02', decision: 'ENTRY DENIED', severity: 'critical' },
+  { time: '10:28:41', worker: 'Sanjay Singh', workerId: 'WK10209', issue: 'Vest Missing', gate: 'GATE 01', decision: 'ENTRY DENIED', severity: 'critical' },
   { time: '09:47:21', worker: 'Vikram Yadav', workerId: 'WK10198', issue: 'Helmet Missing', gate: 'GATE 03', decision: 'WARNING', severity: 'warning' },
-  { time: '09:31:02', worker: 'Deepak Verma', workerId: 'WK10165', issue: 'Self-Rescuer Missing', gate: 'GATE 02', decision: 'ENTRY DENIED', severity: 'critical' },
-  { time: '09:12:57', worker: 'Manoj Tiwari', workerId: 'WK10154', issue: 'Reflective Vest Missing', gate: 'GATE 04', decision: 'WARNING', severity: 'warning' },
+  { time: '09:31:02', worker: 'Deepak Verma', workerId: 'WK10165', issue: 'Boots Missing', gate: 'GATE 02', decision: 'ENTRY DENIED', severity: 'critical' },
+  { time: '09:12:57', worker: 'Manoj Tiwari', workerId: 'WK10154', issue: 'Vest Missing', gate: 'GATE 04', decision: 'WARNING', severity: 'warning' },
 ];
 
 export const PPE_TREND_30D = Array.from({ length: 30 }, (_, i) => {
@@ -61,18 +58,17 @@ export const GATE_VIOLATIONS = GATES.filter((g) => g.status === 'ONLINE').map((g
 }));
 
 export const MOST_COMMON_VIOLATIONS = [
-  { label: 'Gas Detector', pct: 22 },
-  { label: 'Safety Boots', pct: 19 },
-  { label: 'Self-Rescuer', pct: 14 },
+  { label: 'Vest', pct: 22 },
+  { label: 'Boots', pct: 19 },
   { label: 'Helmet', pct: 9 },
 ];
 
 export const ALERTS = [
-  { id: 'AL-4471', severity: 'CRITICAL', title: 'PPE Violation', worker: 'Ramesh Kumar', workerId: 'WK10234', detail: 'Safety Boots Missing', gate: 'GATE 02', time: '10:32:14', status: 'OPEN', officer: 'S. Officer Rana' },
-  { id: 'AL-4470', severity: 'CRITICAL', title: 'PPE Violation', worker: 'Sanjay Singh', workerId: 'WK10209', detail: 'Gas Detector Missing', gate: 'GATE 01', time: '10:28:41', status: 'OPEN', officer: 'S. Officer Rana' },
+  { id: 'AL-4471', severity: 'CRITICAL', title: 'PPE Violation', worker: 'Ramesh Kumar', workerId: 'WK10234', detail: 'Boots Missing', gate: 'GATE 02', time: '10:32:14', status: 'OPEN', officer: 'S. Officer Rana' },
+  { id: 'AL-4470', severity: 'CRITICAL', title: 'PPE Violation', worker: 'Sanjay Singh', workerId: 'WK10209', detail: 'Vest Missing', gate: 'GATE 01', time: '10:28:41', status: 'OPEN', officer: 'S. Officer Rana' },
   { id: 'AL-4469', severity: 'WARNING', title: 'PPE Violation', worker: 'Vikram Yadav', workerId: 'WK10198', detail: 'Helmet Missing', gate: 'GATE 03', time: '09:47:21', status: 'ACKNOWLEDGED', officer: 'Supervisor Meena' },
   { id: 'AL-4468', severity: 'CRITICAL', title: 'Device Offline', worker: '—', workerId: null, detail: 'RFID-002 lost heartbeat', gate: 'GATE 02', time: '09:41:09', status: 'ESCALATED', officer: 'Admin Console' },
-  { id: 'AL-4467', severity: 'WARNING', title: 'PPE Violation', worker: 'Manoj Tiwari', workerId: 'WK10154', detail: 'Reflective Vest Missing', gate: 'GATE 04', time: '09:12:57', status: 'RESOLVED', officer: 'Supervisor Joshi' },
+  { id: 'AL-4467', severity: 'WARNING', title: 'PPE Violation', worker: 'Manoj Tiwari', workerId: 'WK10154', detail: 'Vest Missing', gate: 'GATE 04', time: '09:12:57', status: 'RESOLVED', officer: 'Supervisor Joshi' },
   { id: 'AL-4466', severity: 'RESOLVED', title: 'Missing Exit Scan', worker: 'Rahul Sharma', workerId: 'WK10187', detail: 'No exit RFID scan recorded', gate: 'GATE 01', time: '08:58:03', status: 'RESOLVED', officer: 'Supervisor Joshi' },
 ];
 
@@ -141,11 +137,8 @@ export const USERS = [
 
 export const MANDATORY_PPE = [
   { key: 'helmet', label: 'Helmet', state: 'REQUIRED' },
-  { key: 'capLamp', label: 'Cap Lamp', state: 'REQUIRED' },
-  { key: 'safetyBoots', label: 'Safety Boots', state: 'REQUIRED' },
-  { key: 'reflectiveVest', label: 'Reflective Vest', state: 'REQUIRED' },
-  { key: 'gasDetector', label: 'Gas Detector', state: 'REQUIRED' },
-  { key: 'selfRescuer', label: 'Self-Rescuer', state: 'REQUIRED' },
+  { key: 'safetyBoots', label: 'Boots', state: 'REQUIRED' },
+  { key: 'reflectiveVest', label: 'Vest', state: 'REQUIRED' },
 ];
 
 export const ZONES = [
@@ -181,11 +174,8 @@ export const VERIFICATION_STEPS = [
   { key: 'rfid', label: 'RFID VERIFIED' },
   { key: 'ppe', label: 'CHECKING PPE…' },
   { key: 'helmet', label: 'HELMET' },
-  { key: 'capLamp', label: 'CAP LAMP' },
-  { key: 'safetyBoots', label: 'SAFETY BOOTS' },
-  { key: 'reflectiveVest', label: 'REFLECTIVE VEST' },
-  { key: 'gasDetector', label: 'GAS DETECTOR' },
-  { key: 'selfRescuer', label: 'SELF-RESCUER' },
+  { key: 'safetyBoots', label: 'BOOTS' },
+  { key: 'reflectiveVest', label: 'VEST' },
   { key: 'compliance', label: 'COMPLIANCE CHECK' },
   { key: 'decision', label: 'DECISION' },
 ];
@@ -195,13 +185,10 @@ export const VERIFICATION_RESULT = {
   workerId: 'WK10234',
   ppe: {
     helmet: true,
-    capLamp: true,
     safetyBoots: false,
     reflectiveVest: true,
-    gasDetector: true,
-    selfRescuer: true,
   },
   aiConfidence: 96.4,
   decision: 'ENTRY DENIED',
-  missing: ['Safety Boots'],
+  missing: ['Boots'],
 };

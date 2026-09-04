@@ -29,11 +29,8 @@
  * @property {string} gateId
  * @property {string} timestamp
  * @property {boolean} helmet
- * @property {boolean} capLamp
  * @property {boolean} safetyBoots
  * @property {boolean} reflectiveVest
- * @property {boolean} gasDetector
- * @property {boolean} selfRescuer
  * @property {number} aiConfidence
  * @property {'ALLOWED'|'DENIED'|'WARNING'} decision
  */

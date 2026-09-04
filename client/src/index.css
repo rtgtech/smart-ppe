@@ -267,6 +267,40 @@ body {
 }
 
 /* =========================================================
+   SELECT & DROPDOWN OPTIONS
+========================================================= */
+
+select {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] select {
+  color-scheme: light;
+}
+
+select option,
+.filter-control option,
+.field option {
+  background-color: rgb(var(--color-surface));
+  color: rgb(var(--color-text));
+  padding: 6px 10px;
+}
+
+select option:checked,
+.filter-control option:checked,
+.field option:checked {
+  background-color: rgb(var(--color-elevated));
+  color: rgb(var(--color-text));
+}
+
+select option:disabled,
+.filter-control option:disabled,
+.field option:disabled {
+  color: rgb(var(--color-text-muted));
+}
+
+
+/* =========================================================
    FILTER CONTROLS
 ========================================================= */
 

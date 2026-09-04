@@ -35,7 +35,7 @@ export default function Ppe() {
 
       <div className="mb-6">
         <SectionHeader title="PPE Items" subtitle="Compliance rate per equipment category" />
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {items.map((p) => (
             <div key={p.key} className="panel p-4 rock-texture">
               <div className="label-op mb-2">{p.label}</div>

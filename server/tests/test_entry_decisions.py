@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -103,6 +104,12 @@ class EntryDecisionTest(unittest.TestCase):
         self.assertEqual(event.verdict, "HOLD")
         self.assertEqual(self.db.query(ComplianceLog).one().final_verdict, "HOLD")
         self.assertEqual(self.db.query(AttendanceLog).count(), 0)
+
+    def test_ppe_catalog_rejects_noncanonical_names(self):
+        self.db.add(PpeItem(name="Gloves", is_mandatory=True))
+        with self.assertRaises(IntegrityError):
+            self.db.commit()
+        self.db.rollback()
 
 
 if __name__ == "__main__":

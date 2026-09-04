@@ -13,25 +13,22 @@ from app.models import AttendanceLog, ComplianceLog, Gate, PpeDetection, PpeItem
 
 PPE_CATALOG = {
     "Helmet": {
-        "description": "Yellow HDPE mining helmet with six-point suspension and adjustable chin strap.",
         "serial_prefix": "HLM",
         "service_days": 1095,
         "source": "AI",
         "miss_every": 47,
     },
-    "Safety Boots": {
-        "description": "Ankle-height leather safety boots with steel toe, puncture-resistant midsole, and anti-slip sole.",
-        "serial_prefix": "BTS",
-        "service_days": 365,
-        "source": "AI",
-        "miss_every": 31,
-    },
-    "Reflective Vest": {
-        "description": "Fluorescent lime work vest with 50 mm reflective tape for low-light underground visibility.",
+    "Vest": {
         "serial_prefix": "VST",
         "service_days": 365,
         "source": "AI",
         "miss_every": 13,
+    },
+    "Boots": {
+        "serial_prefix": "BTS",
+        "service_days": 365,
+        "source": "AI",
+        "miss_every": 31,
     },
 }
 
@@ -89,8 +86,6 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
 
     for item_name, details in PPE_CATALOG.items():
         item = items[item_name]
-        item.description = details["description"]
-
         for worker_index, worker in enumerate(workers):
             assignment = (
                 db.query(WorkerPpe)

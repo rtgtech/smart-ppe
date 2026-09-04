@@ -1,7 +1,7 @@
 import { Check, QrCode, ScanLine, ShieldAlert } from 'lucide-react';
 import { useEntry } from '../components/entry-context';
 
-const ITEMS = ['Helmet', 'Reflective Vest', 'Safety Boots'];
+const ITEMS = ['Helmet', 'Vest', 'Boots'];
 
 export default function ScanPpe() {
   const { entry, connection, error } = useEntry();

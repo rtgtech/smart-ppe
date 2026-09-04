@@ -114,10 +114,10 @@ export function FilterBar({ filters, setFilters, gates = [], className = '' }) {
       <FilterField label="Shift" className="w-full flex-[1_1_130px] sm:w-auto">
         <ControlShell icon={Clock3} select>
           <select className="filter-control pr-9" value={filters.shift || 'ALL'} onChange={(event) => update('shift', event.target.value)} aria-label="Filter by shift">
-            <option value="ALL">All shifts</option>
-            <option value="A">Shift A</option>
-            <option value="B">Shift B</option>
-            <option value="C">Shift C</option>
+            <option value="ALL" className="bg-surface text-text">All shifts</option>
+            <option value="A" className="bg-surface text-text">Shift A</option>
+            <option value="B" className="bg-surface text-text">Shift B</option>
+            <option value="C" className="bg-surface text-text">Shift C</option>
           </select>
         </ControlShell>
       </FilterField>
@@ -125,9 +125,9 @@ export function FilterBar({ filters, setFilters, gates = [], className = '' }) {
       <FilterField label="Mine checkpoint" className="w-full flex-[1_1_190px] sm:w-auto">
         <ControlShell icon={MapPin} select>
           <select className="filter-control pr-9" value={filters.gateId || 'ALL'} onChange={(event) => update('gateId', event.target.value)} aria-label="Filter by mine checkpoint">
-            <option value="ALL">All checkpoints</option>
+            <option value="ALL" className="bg-surface text-text">All checkpoints</option>
             {gates.map((gate) => (
-              <option key={gate.gate_id || gate.id} value={gate.gate_id || gate.id}>{gate.name}</option>
+              <option key={gate.gate_id || gate.id} value={gate.gate_id || gate.id} className="bg-surface text-text">{gate.name}</option>
             ))}
           </select>
         </ControlShell>
