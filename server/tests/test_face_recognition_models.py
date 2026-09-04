@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -14,10 +15,34 @@ from app.services.face_recognition import (
     FaceEngine,
     FaceRegistry,
 )
-from app.services.scrfd import DetectedFace, _distance_to_bbox, _distance_to_landmarks
+from app.services.scrfd import SCRFDDetector, DetectedFace, _distance_to_bbox, _distance_to_landmarks
 
 
 class FaceModelAdapterTest(unittest.TestCase):
+    def test_scrfd_automatically_prefers_cuda(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrfd.onnx"
+            path.touch()
+            with (
+                patch(
+                    "app.services.scrfd.ort.get_available_providers",
+                    return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+                ),
+                patch("app.services.scrfd.ort.InferenceSession") as create_session,
+            ):
+                session = create_session.return_value
+                session.get_providers.return_value = ["CUDAExecutionProvider"]
+                session.get_inputs.return_value = [SimpleNamespace(name="input")]
+                session.get_outputs.return_value = [SimpleNamespace(name=str(index)) for index in range(9)]
+
+                detector = SCRFDDetector(path)
+
+            create_session.assert_called_once_with(
+                str(path),
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            )
+            self.assertEqual(detector.provider, "CUDAExecutionProvider")
+
     def test_enrollment_ignores_small_background_faces(self):
         engine = object.__new__(FaceEngine)
         landmarks = np.zeros((5, 2), dtype=np.float32)

@@ -44,7 +44,8 @@ class SCRFDDetector:
         if not model_path.is_file():
             raise FileNotFoundError(f"SCRFD model not found: {model_path}")
         available = set(ort.get_available_providers())
-        wants_cuda = bool(device and str(device).lower() not in {"cpu", "-1"})
+        requested = str(device or "auto").lower()
+        wants_cuda = requested not in {"cpu", "-1"}
         providers = (["CUDAExecutionProvider"] if wants_cuda and "CUDAExecutionProvider" in available else []) + ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(str(model_path), providers=providers)
         self.provider = self.session.get_providers()[0]
