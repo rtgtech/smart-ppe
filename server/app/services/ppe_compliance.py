@@ -1,417 +1,126 @@
-"""Pose-guided PPE-to-person association for the entry camera pipeline."""
+"""Small position-aware PPE classifier for a single camera frame."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import cv2
 
 
-Box = list[float]
-HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
-LEFT_SHOULDER, RIGHT_SHOULDER = 5, 6
-LEFT_ELBOW, RIGHT_ELBOW = 7, 8
-LEFT_WRIST, RIGHT_WRIST = 9, 10
-LEFT_HIP, RIGHT_HIP = 11, 12
-LEFT_KNEE, RIGHT_KNEE = 13, 14
-LEFT_ANKLE, RIGHT_ANKLE = 15, 16
-
-PPE_ITEM_SPECS: dict[str, dict[str, Any]] = {
-    "glove": {"display_name": "Gloves", "regions": ("left_hand", "right_hand"), "pair": True},
-    "goggles": {"display_name": "Goggles", "regions": ("head",), "pair": False},
-    "helmet": {"display_name": "Helmet", "regions": ("head",), "pair": False},
-    "mask": {"display_name": "Mask", "regions": ("head",), "pair": False},
-    "shoes": {"display_name": "Shoes", "regions": ("left_shoe", "right_shoe"), "pair": True},
+PPE_ITEM_SPECS = {
+    "glove": {"display_name": "Gloves", "regions": ("left_hand", "right_hand")},
+    "goggles": {"display_name": "Goggles", "regions": ("head",)},
+    "helmet": {"display_name": "Helmet", "regions": ("head",)},
+    "mask": {"display_name": "Mask", "regions": ("head",)},
+    "shoes": {"display_name": "Shoes", "regions": ("left_foot", "right_foot")},
 }
-MODEL_PPE_CLASSES = frozenset(PPE_ITEM_SPECS) | frozenset(f"no_{label}" for label in PPE_ITEM_SPECS)
+MODEL_PPE_CLASSES = frozenset(PPE_ITEM_SPECS) | {f"no_{name}" for name in PPE_ITEM_SPECS}
 
 
-def _area(box: Box) -> float:
-    return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
-
-
-def _intersection(first: Box, second: Box) -> float:
-    return max(0.0, min(first[2], second[2]) - max(first[0], second[0])) * max(
-        0.0, min(first[3], second[3]) - max(first[1], second[1])
-    )
-
-
-def box_iou(first: Box, second: Box) -> float:
-    overlap = _intersection(first, second)
-    union = _area(first) + _area(second) - overlap
-    return overlap / union if union > 0 else 0.0
-
-
-def _box_coverage(detection: Box, region: Box) -> float:
-    area = _area(detection)
-    return _intersection(detection, region) / area if area > 0 else 0.0
-
-
-def _center_inside(box: Box, region: Box) -> bool:
-    center_x = (box[0] + box[2]) / 2
-    center_y = (box[1] + box[3]) / 2
-    return region[0] <= center_x <= region[2] and region[1] <= center_y <= region[3]
-
-
-def _clamp(box: Box, width: int, height: int) -> Box:
-    return [
-        round(max(0.0, min(float(width), box[0])), 1),
-        round(max(0.0, min(float(height), box[1])), 1),
-        round(max(0.0, min(float(width), box[2])), 1),
-        round(max(0.0, min(float(height), box[3])), 1),
-    ]
-
-
-def _not_clipped(box: Box, width: int, height: int) -> bool:
-    return box[0] > 0 and box[1] > 0 and box[2] < width and box[3] < height
-
-
-def _point(keypoints: list[list[float]], index: int, threshold: float) -> list[float] | None:
-    if index >= len(keypoints) or len(keypoints[index]) < 3:
-        return None
-    x, y, confidence = keypoints[index][:3]
-    if float(confidence) < threshold:
-        return None
-    return [float(x), float(y), float(confidence)]
-
-
-def _region(points: list[list[float]], pad_x: float, pad_top: float, pad_bottom: float, width: int, height: int) -> Box:
-    xs = [point[0] for point in points]
-    ys = [point[1] for point in points]
-    return _clamp(
-        [min(xs) - pad_x, min(ys) - pad_top, max(xs) + pad_x, max(ys) + pad_bottom],
-        width,
-        height,
-    )
-
-
-@dataclass
-class _Track:
-    bbox: Box
-    missed: int = 0
+def _iou(a: list[float], b: list[float]) -> float:
+    overlap = max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - overlap
+    return overlap / union if union > 0 else 0
 
 
 class PersonTracker:
-    """Small per-WebSocket tracker that avoids sharing state between gate attempts."""
-
-    def __init__(self, iou_threshold: float = 0.30, max_missed: int = 15) -> None:
-        self.iou_threshold = iou_threshold
-        self.max_missed = max_missed
-        self._next_id = 1
-        self._tracks: dict[int, _Track] = {}
+    def __init__(self) -> None:
+        self.boxes: dict[int, list[float]] = {}
+        self.next_id = 1
 
     def update(self, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        for track in self._tracks.values():
-            track.missed += 1
-
-        candidates: list[tuple[float, int, int]] = []
-        for person_index, person in enumerate(people):
-            for track_id, track in self._tracks.items():
-                score = box_iou(person["bbox"], track.bbox)
-                if score >= self.iou_threshold:
-                    candidates.append((score, person_index, track_id))
-
-        used_people: set[int] = set()
-        used_tracks: set[int] = set()
-        for _, person_index, track_id in sorted(candidates, reverse=True):
-            if person_index in used_people or track_id in used_tracks:
-                continue
-            people[person_index]["track_id"] = track_id
-            self._tracks[track_id] = _Track(list(people[person_index]["bbox"]))
-            used_people.add(person_index)
-            used_tracks.add(track_id)
-
-        for person_index, person in enumerate(people):
-            if person_index in used_people:
-                continue
-            track_id = self._next_id
-            self._next_id += 1
-            person["track_id"] = track_id
-            self._tracks[track_id] = _Track(list(person["bbox"]))
-
-        self._tracks = {
-            track_id: track
-            for track_id, track in self._tracks.items()
-            if track.missed <= self.max_missed
-        }
+        unused = set(self.boxes)
+        for person in people:
+            match = max(unused, key=lambda key: _iou(person["bbox"], self.boxes[key]), default=None)
+            if match is None or _iou(person["bbox"], self.boxes[match]) < .3:
+                match, self.next_id = self.next_id, self.next_id + 1
+            else:
+                unused.remove(match)
+            person["track_id"] = match
+            self.boxes[match] = person["bbox"]
+        self.boxes = {person["track_id"]: person["bbox"] for person in people}
         return people
 
 
-def _body_regions(
-    person: dict[str, Any],
-    frame_width: int,
-    frame_height: int,
-    keypoint_threshold: float,
-    min_height_ratio: float,
-    frame_margin_ratio: float,
-) -> dict[str, dict[str, Any]]:
-    x1, y1, x2, y2 = [float(value) for value in person["bbox"]]
-    person_width = max(1.0, x2 - x1)
-    person_height = max(1.0, y2 - y1)
-    keypoints = person.get("keypoints") or []
-    margin_x = frame_width * frame_margin_ratio
-    margin_y = frame_height * frame_margin_ratio
-    full_body_visible = (
-        person_height / max(1, frame_height) >= min_height_ratio
-        and x1 >= margin_x
-        and y1 >= margin_y
-        and x2 <= frame_width - margin_x
-        and y2 <= frame_height - margin_y
-    )
-
-    head_points = [point for index in HEAD_KEYPOINTS if (point := _point(keypoints, index, keypoint_threshold))]
-    if len(head_points) >= 2:
-        head = _region(head_points, person_width * 0.10, person_height * 0.12, person_height * 0.05, frame_width, frame_height)
-        head_source = "pose"
-        head_confidence = sum(point[2] for point in head_points) / len(head_points)
-    else:
-        head = _clamp([x1, y1, x2, y1 + person_height * 0.28], frame_width, frame_height)
-        head_source = "bbox"
-        head_confidence = 0.65 if full_body_visible else 0.0
-
-    torso_indices = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
-    torso_points = [point for index in torso_indices if (point := _point(keypoints, index, keypoint_threshold))]
-    has_shoulders = all(_point(keypoints, index, keypoint_threshold) for index in (LEFT_SHOULDER, RIGHT_SHOULDER))
-    has_hip = any(_point(keypoints, index, keypoint_threshold) for index in (LEFT_HIP, RIGHT_HIP))
-    if len(torso_points) >= 3 and has_shoulders and has_hip:
-        torso = _region(torso_points, person_width * 0.10, person_height * 0.04, person_height * 0.07, frame_width, frame_height)
-        torso_source = "pose"
-        torso_confidence = sum(point[2] for point in torso_points) / len(torso_points)
-    else:
-        torso = _clamp(
-            [x1 + person_width * 0.08, y1 + person_height * 0.18, x2 - person_width * 0.08, y1 + person_height * 0.68],
-            frame_width,
-            frame_height,
-        )
-        torso_source = "bbox"
-        torso_confidence = 0.65 if full_body_visible else 0.0
-
-    hand_regions: dict[str, Box] = {}
-    hand_confidences: list[float] = []
-    for side, elbow_index, wrist_index, fallback_x1, fallback_x2 in (
-        ("left", LEFT_ELBOW, LEFT_WRIST, x1, x1 + person_width / 2),
-        ("right", RIGHT_ELBOW, RIGHT_WRIST, x1 + person_width / 2, x2),
-    ):
-        elbow = _point(keypoints, elbow_index, keypoint_threshold)
-        wrist = _point(keypoints, wrist_index, keypoint_threshold)
-        if elbow and wrist:
-            hand_regions[side] = _region(
-                [elbow, wrist], person_width * 0.12, person_height * 0.03,
-                person_height * 0.05, frame_width, frame_height,
-            )
-            hand_confidences.extend((elbow[2], wrist[2]))
-        else:
-            hand_regions[side] = _clamp(
-                [fallback_x1, y1 + person_height * 0.25, fallback_x2, y1 + person_height * 0.68],
-                frame_width,
-                frame_height,
-            )
-
-    hands_points_present = all(
-        _point(keypoints, index, keypoint_threshold)
-        for index in (LEFT_ELBOW, RIGHT_ELBOW, LEFT_WRIST, RIGHT_WRIST)
-    )
-    hands_source = "pose" if hands_points_present else "bbox"
-    hands_confidence = (
-        sum(hand_confidences) / len(hand_confidences)
-        if hands_points_present and hand_confidences
-        else 0.65 if full_body_visible else 0.0
-    )
-
-    shoe_regions: dict[str, Box] = {}
-    shoe_confidences: list[float] = []
-    for side, knee_index, ankle_index, fallback_x1, fallback_x2 in (
-        ("left", LEFT_KNEE, LEFT_ANKLE, x1, x1 + person_width / 2),
-        ("right", RIGHT_KNEE, RIGHT_ANKLE, x1 + person_width / 2, x2),
-    ):
-        knee = _point(keypoints, knee_index, keypoint_threshold)
-        ankle = _point(keypoints, ankle_index, keypoint_threshold)
-        if knee and ankle:
-            shoe_regions[side] = _region(
-                [knee, ankle], person_width * 0.10, person_height * 0.02, person_height * 0.08, frame_width, frame_height
-            )
-            shoe_confidences.extend((knee[2], ankle[2]))
-        else:
-            shoe_regions[side] = _clamp(
-                [fallback_x1, y1 + person_height * 0.68, fallback_x2, y2], frame_width, frame_height
-            )
-
-    lower_points_present = all(
-        _point(keypoints, index, keypoint_threshold)
-        for index in (LEFT_KNEE, RIGHT_KNEE, LEFT_ANKLE, RIGHT_ANKLE)
-    )
-    shoes_source = "pose" if lower_points_present else "bbox"
-    shoes_confidence = (
-        sum(shoe_confidences) / len(shoe_confidences)
-        if lower_points_present and shoe_confidences
-        else 0.65 if full_body_visible else 0.0
-    )
-
-    return {
-        "head": {"bbox": head, "source": head_source, "visible": head_confidence > 0 and _not_clipped(head, frame_width, frame_height), "visibility_confidence": round(head_confidence, 4)},
-        "torso": {"bbox": torso, "source": torso_source, "visible": torso_confidence > 0 and _not_clipped(torso, frame_width, frame_height), "visibility_confidence": round(torso_confidence, 4)},
-        "left_hand": {"bbox": hand_regions["left"], "source": hands_source, "visible": hands_confidence > 0 and _not_clipped(hand_regions["left"], frame_width, frame_height), "visibility_confidence": round(hands_confidence, 4)},
-        "right_hand": {"bbox": hand_regions["right"], "source": hands_source, "visible": hands_confidence > 0 and _not_clipped(hand_regions["right"], frame_width, frame_height), "visibility_confidence": round(hands_confidence, 4)},
-        "left_shoe": {"bbox": shoe_regions["left"], "source": shoes_source, "visible": shoes_confidence > 0 and _not_clipped(shoe_regions["left"], frame_width, frame_height), "visibility_confidence": round(shoes_confidence, 4)},
-        "right_shoe": {"bbox": shoe_regions["right"], "source": shoes_source, "visible": shoes_confidence > 0 and _not_clipped(shoe_regions["right"], frame_width, frame_height), "visibility_confidence": round(shoes_confidence, 4)},
+def _regions(box: list[float], width: int, height: int) -> tuple[dict[str, dict[str, Any]], bool]:
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    full = h >= height * .58 and x1 > 2 and y1 > 2 and x2 < width - 2 and y2 < height - 2
+    raw = {
+        "head": [x1 + .12*w, y1, x2 - .12*w, y1 + .30*h],
+        "left_hand": [x1 - .08*w, y1 + .25*h, x1 + .42*w, y1 + .72*h],
+        "right_hand": [x1 + .58*w, y1 + .25*h, x2 + .08*w, y1 + .72*h],
+        "left_foot": [x1, y1 + .70*h, x1 + .56*w, y2],
+        "right_foot": [x1 + .44*w, y1 + .70*h, x2, y2],
     }
+    clamp = lambda value, maximum: max(0., min(float(maximum), value))
+    return ({name: {"bbox": [clamp(b[0], width), clamp(b[1], height), clamp(b[2], width), clamp(b[3], height)], "visible": full} for name, b in raw.items()}, full)
 
 
-def _association_candidates(
-    label: str,
-    detection_box: Box,
-    people: list[dict[str, Any]],
-    overlap_threshold: float,
-) -> list[tuple[float, int, str]]:
-    candidates: list[tuple[float, int, str]] = []
-    for person_index, person in enumerate(people):
-        regions = person["rois"]
-        names = PPE_ITEM_SPECS[label]["regions"]
-
-        scores = {name: _box_coverage(detection_box, regions[name]["bbox"]) for name in names}
-        if PPE_ITEM_SPECS[label]["pair"] and all(score >= 0.15 for score in scores.values()):
-            combined_score = min(1.0, sum(scores.values()))
-            candidates.append((combined_score, person_index, "both"))
-            continue
-        for name, score in scores.items():
-            if score >= overlap_threshold and _center_inside(detection_box, regions[name]["bbox"]):
-                candidates.append((score, person_index, name))
-    return candidates
+def _coverage(item: list[float], region: list[float]) -> float:
+    overlap = max(0, min(item[2], region[2]) - max(item[0], region[0])) * max(0, min(item[3], region[3]) - max(item[1], region[1]))
+    area = max(1, (item[2] - item[0]) * (item[3] - item[1]))
+    center = ((item[0] + item[2]) / 2, (item[1] + item[3]) / 2)
+    return overlap / area if region[0] <= center[0] <= region[2] and region[1] <= center[1] <= region[3] else 0
 
 
-def analyze_compliance(
-    people: list[dict[str, Any]],
-    ppe_detections: list[dict[str, Any]],
-    tracker: PersonTracker,
-    frame_shape: tuple[int, ...],
-    *,
-    keypoint_threshold: float = 0.35,
-    overlap_threshold: float = 0.50,
-    min_height_ratio: float = 0.60,
-    frame_margin_ratio: float = 0.02,
-) -> list[dict[str, Any]]:
-    """Return per-person worn-PPE decisions for one frame."""
-    frame_height, frame_width = frame_shape[:2]
+def analyze_compliance(people: list[dict[str, Any]], detections: list[dict[str, Any]], tracker: PersonTracker, frame_shape: tuple[int, ...], **_: Any) -> list[dict[str, Any]]:
+    height, width = frame_shape[:2]
     tracked = tracker.update(people)
     for person in tracked:
-        person["rois"] = _body_regions(
-            person,
-            frame_width,
-            frame_height,
-            keypoint_threshold,
-            min_height_ratio,
-            frame_margin_ratio,
-        )
-        person["associations"] = {label: [] for label in PPE_ITEM_SPECS}
+        person["rois"], person["full_body_visible"] = _regions(person["bbox"], width, height)
+        person["associations"] = {name: [] for name in PPE_ITEM_SPECS}
 
-    for detection in ppe_detections:
+    for detection in detections:
         model_label = str(detection.get("label", "")).lower()
-        if model_label not in MODEL_PPE_CLASSES:
-            continue
-        is_negative = model_label.startswith("no_")
         label = model_label.removeprefix("no_")
-        candidates = _association_candidates(label, detection["bbox"], tracked, overlap_threshold)
-        if not candidates:
-            detection["worn"] = False
+        if label not in PPE_ITEM_SPECS:
             continue
-        score, person_index, region = max(candidates, key=lambda item: (item[0], -item[1]))
-        association = {
-            "bbox": list(detection["bbox"]),
-            "detection_confidence": float(detection["confidence"]),
-            "association_score": round(score, 4),
-            "region": region,
-            "is_negative": is_negative,
-        }
-        tracked[person_index]["associations"][label].append(association)
-        detection.update({
-            "track_id": tracked[person_index]["track_id"],
-            "ppe_item": label,
-            "region": region,
-            "association_score": round(score, 4),
-            "worn": not is_negative,
-        })
+        options = []
+        for index, person in enumerate(tracked):
+            for region in PPE_ITEM_SPECS[label]["regions"]:
+                score = _coverage(detection["bbox"], person["rois"][region]["bbox"])
+                if score >= .25:
+                    options.append((score, index, region))
+        if not options:
+            continue
+        score, index, region = max(options)
+        row = {"bbox": detection["bbox"], "confidence": detection["confidence"], "association_score": round(score, 3), "region": region, "negative": model_label.startswith("no_")}
+        tracked[index]["associations"][label].append(row)
+        detection.update(track_id=tracked[index]["track_id"], worn=not row["negative"], region=region)
 
-    results: list[dict[str, Any]] = []
     for person in tracked:
-        result: dict[str, Any] = {
-            "track_id": person["track_id"],
-            "bbox": [round(float(value), 1) for value in person["bbox"]],
-            "pose_confidence": round(float(person.get("confidence", 0.0)), 4),
-            "rois": person["rois"],
-            "associations": person["associations"],
-        }
-        item_states: list[str] = []
-        for label, spec in PPE_ITEM_SPECS.items():
-            associations = person["associations"][label]
-            negative = [row for row in associations if row["is_negative"]]
-            positive = [row for row in associations if not row["is_negative"]]
-            regions = spec["regions"]
-
+        states = []
+        for label, specification in PPE_ITEM_SPECS.items():
+            rows = person["associations"][label]
+            positive = [row for row in rows if not row["negative"]]
+            negative = [row for row in rows if row["negative"]]
+            found_regions = {row["region"] for row in positive}
             if negative:
-                best = max(negative, key=lambda row: row["detection_confidence"] * row["association_score"])
-                state = "NO"
-                confidence = best["detection_confidence"] * best["association_score"]
-            elif spec["pair"]:
-                matched_regions: set[str] = set()
-                for association in positive:
-                    if association["region"] == "both":
-                        matched_regions.update(regions)
-                    else:
-                        matched_regions.add(association["region"])
-                if set(regions).issubset(matched_regions):
-                    state = "YES"
-                    confidence = min(
-                        row["detection_confidence"] * row["association_score"] for row in positive
-                    )
-                elif all(person["rois"][name]["visible"] for name in regions):
-                    state = "NO"
-                    confidence = min(person["rois"][name]["visibility_confidence"] for name in regions)
-                else:
-                    state, confidence = "UNKNOWN", 0.0
-            elif positive:
-                best = max(positive, key=lambda row: row["detection_confidence"] * row["association_score"])
-                state = "YES"
-                confidence = best["detection_confidence"] * best["association_score"]
-            elif all(person["rois"][name]["visible"] for name in regions):
-                state = "NO"
-                confidence = min(person["rois"][name]["visibility_confidence"] for name in regions)
+                state, confidence = "NO", max(row["confidence"] for row in negative)
+            elif set(specification["regions"]) <= found_regions:
+                state, confidence = "YES", min(row["confidence"] for row in positive)
+            elif person["full_body_visible"]:
+                state, confidence = "NO", .65
             else:
-                state, confidence = "UNKNOWN", 0.0
-
-            result[label] = state
-            result[f"{label}_confidence"] = round(confidence, 4)
-            item_states.append(state)
-
-        result["status"] = "VIOLATION" if "NO" in item_states else "COMPLIANT" if all(state == "YES" for state in item_states) else "UNKNOWN"
-        results.append(result)
-    return results
+                state, confidence = "UNKNOWN", 0
+            person[label], person[f"{label}_confidence"] = state, round(float(confidence), 4)
+            states.append(state)
+        person["status"] = "VIOLATION" if "NO" in states else "COMPLIANT" if all(value == "YES" for value in states) else "UNKNOWN"
+    return tracked
 
 
-def annotate_compliance(image: Any, people: list[dict[str, Any]], detections: list[dict[str, Any]] | None = None) -> Any:
-    colors = {"COMPLIANT": (70, 220, 90), "VIOLATION": (40, 40, 235), "UNKNOWN": (0, 190, 255)}
-    roi_colors = {
-        "head": (255, 200, 0), "torso": (255, 100, 180),
-        "left_hand": (180, 120, 255), "right_hand": (180, 120, 255),
-        "left_shoe": (200, 160, 80), "right_shoe": (200, 160, 80),
-    }
+def annotate_compliance(image: Any, people: list[dict[str, Any]], detections: list[dict[str, Any]]) -> Any:
     for person in people:
-        color = colors[person["status"]]
-        x1, y1, x2, y2 = (int(value) for value in person["bbox"])
+        color = (68, 220, 90) if person["status"] == "COMPLIANT" else (50, 60, 235) if person["status"] == "VIOLATION" else (0, 190, 255)
+        x1, y1, x2, y2 = map(int, person["bbox"])
         cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
-        state_label = " ".join(f"{name[0].upper()}:{person[name]}" for name in PPE_ITEM_SPECS)
-        label = f"ID {person['track_id']} {person['status']} {state_label}"
-        cv2.putText(image, label, (x1, max(18, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 2, cv2.LINE_AA)
-        for name, region in person["rois"].items():
-            rx1, ry1, rx2, ry2 = (int(value) for value in region["bbox"])
-            cv2.rectangle(image, (rx1, ry1), (rx2, ry2), roi_colors[name], 1)
-    for detection in detections or []:
-        if str(detection.get("label", "")).lower() not in MODEL_PPE_CLASSES:
+        cv2.putText(image, person["status"], (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, .55, color, 2)
+    for item in detections:
+        if item.get("track_id") is None:
             continue
-        is_negative = str(detection.get("label", "")).lower().startswith("no_")
-        color = (40, 40, 235) if is_negative else (70, 220, 90) if detection.get("worn") else (130, 130, 130)
-        x1, y1, x2, y2 = (int(value) for value in detection["bbox"])
-        suffix = f"person {detection['track_id']}" if detection.get("track_id") else "unassigned"
+        color = (68, 220, 90) if item.get("worn") else (50, 60, 235)
+        x1, y1, x2, y2 = map(int, item["bbox"])
         cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(image, f"{detection['label']} {suffix}", (x1, max(18, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
+        cv2.putText(image, item["label"], (x1, max(20, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, .45, color, 1)
     return image

@@ -1,9 +1,9 @@
 # SURAKSHA Smart PPE
 
 SURAKSHA is a mine-safety monitoring application with a React dashboard and a
-FastAPI backend. The live verification page captures camera frames in the
-browser, sends them to the server over WebSocket, and displays only the returned
-video annotated with YOLO PPE detections and local face identification.
+FastAPI backend. The entry page streams camera frames to the server and displays
+the annotated JPEG frames returned by the face and PPE models. Entry scan state
+is kept only in server memory; it is never written to the database.
 
 ## Project structure
 
@@ -14,7 +14,7 @@ smart-ppe/
 |-- data/suraksha.db                Local SQLite database (created automatically)
 |-- best2.pt                        YOLO PPE model
 `-- stream_test/server/
-    |-- models/                     YuNet and SFace ONNX models
+    |-- models/                     SCRFD ONNX and EdgeFace PyTorch models
     `-- data/faces.json             Local enrolled-face registry
 ```
 
@@ -34,13 +34,22 @@ Verify that these files exist before starting the server:
 
 ```text
 best2.pt
-stream_test/server/models/face_detection_yunet_2023mar.onnx
-stream_test/server/models/face_recognition_sface_2021dec.onnx
+stream_test/server/models/scrfd_10g_bnkps.onnx
+stream_test/server/models/edgeface_s_gamma_05.pt
 ```
 
-The model files and `faces.json` are ignored by Git. Keep a separate local copy
-when cloning or moving the project. Face embeddings in `faces.json` are
-biometric data and should not be committed.
+The bundled face models are pinned deployment assets. Their SHA-256 digests are
+`5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91`
+(SCRFD) and
+`dc59abda2e8580399fd115a1eeb07e1f21156196db604b884407bcf0f17efb07`
+(EdgeFace). See [`server/THIRD_PARTY_NOTICES.md`](server/THIRD_PARTY_NOTICES.md)
+before deploying them. Face embeddings in `faces.json` are biometric data and
+should not be committed.
+
+Face templates are model-specific. Profiles enrolled with the former SFace
+stack remain visible but are excluded from matching until they are re-enrolled
+with EdgeFace. The health response reports the compatible, total, and
+re-enrollment-required profile counts.
 
 ## First-time setup
 
@@ -118,14 +127,15 @@ The gate entry workflow starts at:
 http://localhost:5173/#/entry/biometric
 ```
 
-Select **Start Verification** and allow camera permission. Raw camera video is
+Select **Start entry scan** and allow camera permission. Raw camera video is
 not displayed; the page renders only frames annotated by the server.
 
 The entry workflow first confirms the worker's face on `/entry/biometric`.
 After identity is locked, the same camera and tracking session advances to
 `/entry/compliance`, where fresh frames verify Gloves, Goggles, Helmet, Mask,
-and both Shoes in their expected anatomical regions before issuing the gate
-verdict.
+and both Shoes in their expected body regions before issuing the gate verdict.
+Identity advances on the first valid recognized frame; PPE requires three consistent observations. The result is discarded
+on **Process next worker** and unfinished sessions expire after ten minutes.
 
 ## Configuration
 
@@ -141,16 +151,20 @@ server:
 | `YOLO_POSE_CONFIDENCE` | `0.35` | Minimum pose/keypoint confidence used for anatomical ROIs |
 | `PPE_REGION_OVERLAP` | `0.50` | Minimum PPE-box coverage inside its expected body region |
 | `MAX_FRAME_BYTES` | `5000000` | Maximum uploaded or streamed JPEG size |
-| `FACE_DETECTOR_PATH` | YuNet model under `stream_test/server/models` | Face detector path |
-| `FACE_RECOGNIZER_PATH` | SFace model under `stream_test/server/models` | Face recognizer path |
+| `FACE_DETECTOR_PATH` | `scrfd_10g_bnkps.onnx` under `stream_test/server/models` | Landmark-capable SCRFD detector path |
+| `FACE_RECOGNIZER_PATH` | `edgeface_s_gamma_05.pt` under `stream_test/server/models` | EdgeFace-S gamma=0.5 checkpoint path |
 | `FACE_REGISTRY_PATH` | `stream_test/server/data/faces.json` | Enrolled face-template registry |
-| `FACE_SIMILARITY_THRESHOLD` | `0.363` | Minimum face-match similarity |
+| `FACE_SIMILARITY_THRESHOLD` | `0.40` | Minimum EdgeFace cosine similarity; calibrate against site data |
+| `FACE_DETECTION_THRESHOLD` | `0.50` | Minimum SCRFD face confidence |
+| `FACE_NMS_THRESHOLD` | `0.40` | SCRFD non-maximum-suppression IoU threshold |
+| `FACE_DETECTION_SIZE` | `640` | Square SCRFD input size; must be a multiple of 32 |
+| `FACE_DEVICE` | `YOLO_DEVICE`, then automatic | EdgeFace PyTorch device and preferred SCRFD provider |
 | `EDGE_DEVICE_SERIAL` | `AI-CAM-G01` | Local AI camera and gate identity |
 | `SURAKSHA_ROLE` | `edge` | Run as `edge` or `central` |
 | `CENTRAL_SYNC_URL` | Empty | Central API base URL for the durable outbox |
 | `SYNC_API_TOKEN` | Empty | Shared deployment secret for central ingestion |
 | `ENTRY_IDENTITY_TIMEOUT_SECONDS` | `10` | Identity evidence deadline |
-| `ENTRY_EVIDENCE_TIMEOUT_SECONDS` | `15` | PPE and QR evidence deadline |
+| `ENTRY_EVIDENCE_TIMEOUT_SECONDS` | `15` | PPE evidence deadline |
 
 The client connects to the event-specific entry WebSocket on port 8000 by
 default. To use another server, create `client/.env` containing:
@@ -170,15 +184,14 @@ client is served over HTTPS.
 - `POST /api/faces` - register a face using exactly five JPEG images
 - `PUT /api/faces/{person_id}` - replace an enrolled face template
 - `DELETE /api/faces/{person_id}` - delete a face profile
-- `POST /api/v1/entry/attempts` - create or resume an idempotent entry attempt
-- `WS /api/v1/entry/attempts/{event_id}/stream` - integrated face, PPE, and QR pipeline
-- `POST /api/v1/entry/sync/events` - idempotent central synchronization receiver
+- `POST /api/v1/entry/attempts` - create an in-memory entry session
+- `GET /api/v1/entry/attempts/{session_id}` - read the transient session
+- `DELETE /api/v1/entry/attempts/{session_id}` - discard the transient session
+- `WS /api/v1/entry/attempts/{session_id}/stream` - stream annotated face and PPE frames
 
-Each WebSocket `frame_meta` message includes a `persons` array with stable
-`track_id`, Gloves/Goggles/Helmet/Mask/Shoes `YES`/`NO`/`UNKNOWN` states and confidences,
-an overall `COMPLIANT`/`VIOLATION`/`UNKNOWN` status, anatomical ROIs, and the
-PPE detections associated with that person. Existing entry, detection, face,
-and inference-timing fields remain available.
+Each WebSocket `frame_meta` message includes the transient entry state, faces,
+PPE detections, person-level results, image quality, and inference timings. The
+server sends the corresponding annotated JPEG as the next WebSocket message.
 
 ## Build and validation
 
@@ -227,14 +240,19 @@ checkpoint during provisioning and set `YOLO_POSE_MODEL` to its local path.
 
 ### A known person is shown as Unknown
 
-Make sure their profile exists in `faces.json`. Re-enroll under lighting and
-camera conditions similar to the live gate. Change
-`FACE_SIMILARITY_THRESHOLD` only after testing false matches and rejections.
+Make sure their profile exists in `faces.json` and that `/health` does not count
+it under `face_profiles_reenrollment_required`. Re-enroll under lighting and
+camera conditions similar to the live gate. Change `FACE_SIMILARITY_THRESHOLD`
+only after measuring both false accepts and false rejects on representative
+site data.
 
 ### Inference is slow
 
 - Set `YOLO_DEVICE=0` when a compatible CUDA-enabled PyTorch installation and
   NVIDIA GPU are available.
+- Set `FACE_DEVICE=0` for EdgeFace GPU inference. SCRFD also uses CUDA when an
+  ONNX Runtime build exposing `CUDAExecutionProvider` is installed; otherwise
+  its health field reports `CPUExecutionProvider`.
 - Reduce `YOLO_IMAGE_SIZE`.
 - Reduce the client frame rate in `AnnotatedVisionFeed.jsx` if necessary.
 
