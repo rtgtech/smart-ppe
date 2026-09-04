@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.v1.routes.entry import REQUIRED, _evaluate
-from app.models import Alert, AttendanceLog, Base, ComplianceLog, Department, Device, Gate, GateEvent, Mine, PpeDetection, PpeItem, Worker, WorkerPpe
+from app.models import Alert, AttendanceLog, AuditLog, Base, ComplianceLog, Department, Device, Gate, GateEvent, Mine, PpeDetection, PpeItem, Worker, WorkerPpe
 
 
 class EntryDecisionTest(unittest.TestCase):
@@ -80,21 +80,23 @@ class EntryDecisionTest(unittest.TestCase):
         self.assertEqual(event.verdict, "ALLOWED")
         self.assertEqual(self.db.query(ComplianceLog).count(), 1)
         self.assertEqual(self.db.query(AttendanceLog).count(), 1)
-        self.assertEqual(self.db.query(PpeDetection).count(), 6)
+        self.assertEqual(self.db.query(PpeDetection).count(), 3)
         self.assertEqual(self.db.query(Alert).count(), 0)
+        self.assertEqual(self.db.query(AuditLog).count(), 6)
         _evaluate(self.db, event, force=True)
         self.db.commit()
         self.assertEqual(self.db.query(ComplianceLog).count(), 1)
         self.assertEqual(self.db.query(AttendanceLog).count(), 1)
+        self.assertEqual(self.db.query(AuditLog).count(), 6)
 
-    def test_missing_qr_denies_known_worker(self):
+    def test_qr_is_not_required_for_known_worker(self):
         event = self.event([self.frame() for _ in range(5)])
         _evaluate(self.db, event, force=True)
         self.db.commit()
-        self.assertEqual(event.verdict, "DENIED")
-        self.assertTrue(any(reason.endswith("QR_MISSING") for reason in json.loads(event.reasons_json)))
-        self.assertEqual(self.db.query(Alert).one().severity, "CRITICAL")
-        self.assertEqual(self.db.query(AttendanceLog).count(), 0)
+        self.assertEqual(event.verdict, "ALLOWED")
+        self.assertFalse(any("QR" in reason for reason in json.loads(event.reasons_json)))
+        self.assertEqual(self.db.query(Alert).count(), 0)
+        self.assertEqual(self.db.query(AttendanceLog).count(), 1)
 
     def test_unknown_identity_holds_without_worker_log(self):
         event = self.event([self.frame(identity="UNKNOWN") for _ in range(5)])

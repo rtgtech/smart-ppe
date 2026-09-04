@@ -1,4 +1,5 @@
 from app.models.alert import Alert
+from app.models.audit_log import AuditLog
 from app.models.attendance_log import AttendanceLog
 from app.models.base import Base
 from app.models.compliance_log import ComplianceLog
@@ -18,6 +19,7 @@ from app.models.worker_ppe import WorkerPpe
 
 __all__ = [
     "Alert",
+    "AuditLog",
     "AttendanceLog",
     "Base",
     "ComplianceLog",

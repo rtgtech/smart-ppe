@@ -7,7 +7,6 @@ import { getDashboard } from '../services/dashboard';
 
 const SYSTEM_HEALTH = [
   { label: 'AI CAMERA', status: 'ONLINE' },
-  { label: 'RFID', status: 'ONLINE' },
   { label: 'EDGE', status: 'ONLINE' },
   { label: 'DATABASE', status: 'ONLINE' },
   { label: 'NOTIFICATIONS', status: 'ONLINE' },

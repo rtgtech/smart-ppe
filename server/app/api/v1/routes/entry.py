@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import statistics
 import uuid
 from collections import Counter
@@ -19,11 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
-from app.models import Alert, AttendanceLog, ComplianceLog, Device, Gate, GateEvent, PpeDetection, PpeItem, SyncOutbox, Worker, WorkerPpe
+from app.core.audit import create_audit_log
+from app.models import Alert, AttendanceLog, ComplianceLog, Device, Gate, GateEvent, PpeDetection, PpeItem, SyncOutbox, Worker
 from app.services.ppe_compliance import PersonTracker
 from app.services.vision import MAX_FRAME_BYTES, decode_jpeg, infer_frame, vision_lock
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/entry", tags=["entry"])
 settings = get_settings()
 REQUIRED = {"Helmet": "helmet", "Vest": "vest", "Boots": "boots"}
@@ -273,47 +275,200 @@ def _summarize(db: Session, event: GateEvent, state: dict[str, Any]) -> tuple[di
     return summary, worker
 
 
-def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None, reasons: list[str], summary: dict[str, Any], state: dict[str, Any]) -> None:
+def _finalize(
+    db: Session,
+    event: GateEvent,
+    verdict: str,
+    worker: Worker | None,
+    reasons: list[str],
+    summary: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    """
+    Finalize a gate event and persist:
+
+        1. GateEvent
+        2. ComplianceLog
+        3. PPE detections
+        4. AttendanceLog when entry is allowed
+        5. Alert when required
+        6. SyncOutbox when central sync is enabled
+
+    This function is intentionally transactional.
+    The caller commits the SQLAlchemy session.
+    """
+
     if event.lifecycle == "FINALIZED":
+        logger.info(
+            "Finalize skipped | event_id=%s already finalized",
+            event.event_id,
+        )
         return
+
     now = _now()
-    event.lifecycle, event.phase, event.verdict, event.finalized_at = "FINALIZED", "FINAL", verdict, now
+
+    logger.info(
+        "Finalizing gate event | event_id=%s verdict=%s worker_id=%s",
+        event.event_id,
+        verdict,
+        worker.worker_id if worker else None,
+    )
+
+    # ---------------------------------------------------------
+    # 1. Finalize GateEvent
+    # ---------------------------------------------------------
+
+    event.lifecycle = "FINALIZED"
+    event.phase = "FINAL"
+    event.verdict = verdict
+    event.finalized_at = now
     event.worker_id = worker.worker_id if worker else None
+
     event.reasons_json = _dump(reasons)
     event.qr_results_json = _dump([])
-    event.interventions_json = _dump({
-        "barrier": "UNLOCKED" if verdict == "ALLOWED" else "LOCKED",
-        "indicator": "GREEN" if verdict == "ALLOWED" else "RED" if verdict == "DENIED" else "AMBER",
-        "audible_warning": verdict == "DENIED",
-    })
-    event.offline_flag = bool(settings.central_sync_url) and not _central_online
-    event.sync_status = "PENDING" if settings.central_sync_url else "SYNCED"
+
+    event.interventions_json = _dump(
+        {
+            "barrier": "UNLOCKED" if verdict == "ALLOWED" else "LOCKED",
+            "indicator": (
+                "GREEN"
+                if verdict == "ALLOWED"
+                else "RED"
+                if verdict == "DENIED"
+                else "AMBER"
+            ),
+            "audible_warning": verdict == "DENIED",
+        }
+    )
+
+    event.offline_flag = (
+        bool(settings.central_sync_url)
+        and not _central_online
+    )
+
+    event.sync_status = (
+        "PENDING"
+        if settings.central_sync_url
+        else "SYNCED"
+    )
+
     event.evidence_json = _dump(state)
 
-    log = None
-    items = db.query(PpeItem).filter(PpeItem.name.in_(REQUIRED)).all()
-    item_by_name = {item.name: item for item in items}
+    # ---------------------------------------------------------
+    # 2. Load PPE catalog
+    # ---------------------------------------------------------
+
+    log: ComplianceLog | None = None
+
+    items = (
+        db.query(PpeItem)
+        .filter(PpeItem.name.in_(REQUIRED))
+        .all()
+    )
+
+    item_by_name = {
+        item.name: item
+        for item in items
+    }
+
+    logger.info(
+        "PPE catalog loaded | event_id=%s items=%s",
+        event.event_id,
+        list(item_by_name.keys()),
+    )
+
+    # ---------------------------------------------------------
+    # 3. Create compliance log
+    # ---------------------------------------------------------
+
     if worker:
-        visual_passes = sum(summary["visual"][name]["state"] == "CONFIRMED" for name in REQUIRED)
-        compliance_score = round(visual_passes * 100 / len(REQUIRED), 1)
-        log = ComplianceLog(
-            event_id=event.event_id, final_verdict=verdict, worker_id=worker.worker_id, gate_id=event.gate_id,
-            entry_time=event.edge_timestamp, overall_status="COMPLIANT" if verdict == "ALLOWED" else "DENIED" if verdict == "DENIED" else "NON_COMPLIANT",
-            compliance_score=compliance_score, confidence_score=event.evidence_confidence,
-            latitude=event.gate_latitude, longitude=event.gate_longitude, offline_flag=event.offline_flag, sync_status=event.sync_status,
+        visual_passes = sum(
+            summary["visual"][name]["state"] == "CONFIRMED"
+            for name in REQUIRED
         )
+
+        compliance_score = round(
+            visual_passes * 100 / len(REQUIRED),
+            1,
+        )
+
+        overall_status = (
+            "COMPLIANT"
+            if verdict == "ALLOWED"
+            else "DENIED"
+            if verdict == "DENIED"
+            else "NON_COMPLIANT"
+        )
+
+        log = ComplianceLog(
+            event_id=event.event_id,
+            final_verdict=verdict,
+            worker_id=worker.worker_id,
+            gate_id=event.gate_id,
+            entry_time=event.edge_timestamp,
+            overall_status=overall_status,
+            compliance_score=compliance_score,
+            confidence_score=event.evidence_confidence,
+            latitude=event.gate_latitude,
+            longitude=event.gate_longitude,
+            offline_flag=event.offline_flag,
+            sync_status=event.sync_status,
+        )
+
         db.add(log)
+
+        # Flush is required so SQLAlchemy generates log.log_id
+        # before PPE detections reference it.
         db.flush()
+
+        logger.info(
+            "Compliance saved | "
+            "event_id=%s log_id=%s worker_id=%s gate_id=%s "
+            "status=%s score=%.1f confidence=%s",
+            event.event_id,
+            log.log_id,
+            worker.worker_id,
+            event.gate_id,
+            overall_status,
+            compliance_score,
+            event.evidence_confidence,
+        )
+
+        # -----------------------------------------------------
+        # 4. Create PPE detections
+        # -----------------------------------------------------
+
+        detection_count = 0
+
         for name in REQUIRED:
             item = item_by_name.get(name)
+
             if not item:
+                logger.warning(
+                    "PPE catalog item missing | "
+                    "event_id=%s ppe_name=%s",
+                    event.event_id,
+                    name,
+                )
                 continue
+
             visual = summary["visual"][name]
-            db.add(PpeDetection(
+
+            detected = (
+                visual["state"] == "CONFIRMED"
+            )
+
+            confidence_score = (
+                (visual["confidence"] or 0) * 100
+                if visual["confidence"] is not None
+                else None
+            )
+
+            detection = PpeDetection(
                 log_id=log.log_id,
                 ppe_id=item.ppe_id,
-                detected=visual["state"] == "CONFIRMED",
-                confidence_score=(visual["confidence"] or 0) * 100 if visual["confidence"] is not None else None,
+                detected=detected,
+                confidence_score=confidence_score,
                 bounding_box=_dump({
                     "detection": visual.get("bbox"),
                     "roi": visual.get("roi"),
@@ -323,26 +478,296 @@ def _finalize(db: Session, event: GateEvent, verdict: str, worker: Worker | None
                 detection_source="AI",
                 evidence_state=visual["state"],
                 assignment_result=visual.get("worn_state"),
-            ))
-        if verdict == "ALLOWED":
-            db.add(AttendanceLog(event_id=event.event_id, worker_id=worker.worker_id, gate_id=event.gate_id, entry_time=event.edge_timestamp, status="INSIDE"))
+            )
 
-    identity_alert = verdict == "HOLD" and any(reason in reasons for reason in ("UNKNOWN_FACE", "MULTIPLE_IDENTITIES", "MULTIPLE_PERSONS"))
+            db.add(detection)
+            detection_count += 1
+
+            logger.info(
+                "PPE detection saved | "
+                "event_id=%s log_id=%s ppe_id=%s ppe=%s "
+                "detected=%s confidence=%s state=%s source=AI",
+                event.event_id,
+                log.log_id,
+                item.ppe_id,
+                name,
+                detected,
+                confidence_score,
+                visual["state"],
+            )
+
+        logger.info(
+            "PPE detections prepared | "
+            "event_id=%s log_id=%s count=%s",
+            event.event_id,
+            log.log_id,
+            detection_count,
+        )
+
+        # -----------------------------------------------------
+        # 5. Attendance
+        # -----------------------------------------------------
+
+        if verdict == "ALLOWED":
+            attendance = AttendanceLog(
+                event_id=event.event_id,
+                worker_id=worker.worker_id,
+                gate_id=event.gate_id,
+                entry_time=event.edge_timestamp,
+                status="INSIDE",
+            )
+
+            db.add(attendance)
+
+            logger.info(
+                "Attendance prepared | "
+                "event_id=%s worker_id=%s gate_id=%s status=INSIDE",
+                event.event_id,
+                worker.worker_id,
+                event.gate_id,
+            )
+
+        else:
+            logger.info(
+                "Attendance not created | "
+                "event_id=%s worker_id=%s verdict=%s",
+                event.event_id,
+                worker.worker_id,
+                verdict,
+            )
+
+    else:
+        logger.warning(
+            "Compliance/attendance not created because worker "
+            "identity was not confirmed | event_id=%s verdict=%s reasons=%s",
+            event.event_id,
+            verdict,
+            reasons,
+        )
+
+    # ---------------------------------------------------------
+    # 6. Alerts
+    # ---------------------------------------------------------
+
+    identity_alert = (
+        verdict == "HOLD"
+        and any(
+            reason in reasons
+            for reason in (
+                "UNKNOWN_FACE",
+                "MULTIPLE_IDENTITIES",
+                "MULTIPLE_PERSONS",
+            )
+        )
+    )
+
     if verdict == "DENIED" or identity_alert:
-        db.add(Alert(
-            event_id=event.event_id, gate_id=event.gate_id, log_id=log.log_id if log else None,
+        alert = Alert(
+            event_id=event.event_id,
+            gate_id=event.gate_id,
+            log_id=log.log_id if log else None,
             worker_id=worker.worker_id if worker else None,
-            alert_type="GATE_COMPLIANCE_DENIED" if verdict == "DENIED" else "GATE_IDENTITY_HOLD",
-            severity="CRITICAL" if verdict == "DENIED" else "WARNING",
-            message="; ".join(reasons), status="ACTIVE",
-        ))
+            alert_type=(
+                "GATE_COMPLIANCE_DENIED"
+                if verdict == "DENIED"
+                else "GATE_IDENTITY_HOLD"
+            ),
+            severity=(
+                "CRITICAL"
+                if verdict == "DENIED"
+                else "WARNING"
+            ),
+            message="; ".join(reasons),
+            status="ACTIVE",
+        )
+
+        db.add(alert)
+
+        logger.warning(
+            "Alert created | "
+            "event_id=%s worker_id=%s type=%s severity=%s reasons=%s",
+            event.event_id,
+            worker.worker_id if worker else None,
+            alert.alert_type,
+            alert.severity,
+            reasons,
+        )
+
+    # ---------------------------------------------------------
+    # 7. Prepare central sync payload
+    # ---------------------------------------------------------
 
     payload = _event_dict(event)
-    payload_json = _dump({"schema_version": 1, "event": payload})
-    payload_hash = hashlib.sha256(payload_json.encode()).hexdigest()
+
+    payload_json = _dump(
+        {
+            "schema_version": 1,
+            "event": payload,
+        }
+    )
+
+    payload_hash = hashlib.sha256(
+        payload_json.encode()
+    ).hexdigest()
+
     event.payload_hash = payload_hash
+
     if settings.central_sync_url:
-        db.add(SyncOutbox(event_id=event.event_id, payload_json=payload_json, payload_hash=payload_hash, next_retry_at=now))
+        db.add(
+            SyncOutbox(
+                event_id=event.event_id,
+                payload_json=payload_json,
+                payload_hash=payload_hash,
+                next_retry_at=now,
+            )
+        )
+
+        logger.info(
+            "Sync outbox record created | "
+            "event_id=%s sync_status=%s",
+            event.event_id,
+            event.sync_status,
+        )
+
+    # ---------------------------------------------------------
+    # 8. Audit log — gate event finalized
+    # ---------------------------------------------------------
+
+    create_audit_log(
+        db,
+        category="GATE_EVENT",
+        action="GATE_FINALIZED",
+        status=verdict,
+        message=f"Gate event finalized | verdict={verdict} reasons={reasons}",
+        event_id=event.event_id,
+        worker_id=worker.worker_id if worker else None,
+        gate_id=event.gate_id,
+        metadata={
+            "verdict": verdict,
+            "reasons": reasons,
+            "identity_confidence": event.identity_confidence,
+            "ppe_confidence": event.ppe_confidence,
+            "evidence_confidence": event.evidence_confidence,
+            "offline": event.offline_flag,
+        },
+    )
+
+    if worker:
+        # Compliance audit
+        compliance_overall = (
+            "COMPLIANT"
+            if verdict == "ALLOWED"
+            else "DENIED"
+            if verdict == "DENIED"
+            else "NON_COMPLIANT"
+        )
+        create_audit_log(
+            db,
+            category="COMPLIANCE",
+            action="COMPLIANCE_CREATED",
+            status=compliance_overall,
+            message=(
+                f"Compliance record created | "
+                f"verdict={verdict} status={compliance_overall}"
+            ),
+            event_id=event.event_id,
+            worker_id=worker.worker_id,
+            gate_id=event.gate_id,
+            metadata={
+                "final_verdict": verdict,
+                "overall_status": compliance_overall,
+                "compliance_score": (
+                    log.compliance_score if log else None
+                ),
+                "confidence_score": event.evidence_confidence,
+            },
+        )
+
+        # PPE detection audits
+        for name in REQUIRED:
+            visual = summary["visual"][name]
+            create_audit_log(
+                db,
+                category="PPE",
+                action="PPE_DETECTION",
+                status=visual["state"],
+                message=(
+                    f"PPE detection | "
+                    f"ppe={name} state={visual['state']} "
+                    f"detected={visual['state'] == 'CONFIRMED'}"
+                ),
+                event_id=event.event_id,
+                worker_id=worker.worker_id,
+                gate_id=event.gate_id,
+                metadata={
+                    "ppe_name": name,
+                    "detected": visual["state"] == "CONFIRMED",
+                    "evidence_state": visual["state"],
+                    "confidence": visual.get("confidence"),
+                    "detection_source": "AI",
+                },
+            )
+
+        if verdict == "ALLOWED":
+            create_audit_log(
+                db,
+                category="ATTENDANCE",
+                action="ATTENDANCE_CREATED",
+                status="INSIDE",
+                message="Attendance created | worker entered gate",
+                event_id=event.event_id,
+                worker_id=worker.worker_id,
+                gate_id=event.gate_id,
+                metadata={"entry_status": "INSIDE"},
+            )
+        else:
+            create_audit_log(
+                db,
+                category="ATTENDANCE",
+                action="ATTENDANCE_SKIPPED",
+                status=verdict,
+                message=(
+                    f"Attendance not created | "
+                    f"verdict={verdict} worker_id={worker.worker_id}"
+                ),
+                event_id=event.event_id,
+                worker_id=worker.worker_id,
+                gate_id=event.gate_id,
+                metadata={"verdict": verdict, "reasons": reasons},
+            )
+
+    # Alert audit (if an alert was created above)
+    if verdict == "DENIED" or identity_alert:
+        _alert_type = (
+            "GATE_COMPLIANCE_DENIED"
+            if verdict == "DENIED"
+            else "GATE_IDENTITY_HOLD"
+        )
+        _severity = "CRITICAL" if verdict == "DENIED" else "WARNING"
+        create_audit_log(
+            db,
+            category="ALERT",
+            action="ALERT_CREATED",
+            status=_severity,
+            message=f"Alert created | type={_alert_type} reasons={reasons}",
+            event_id=event.event_id,
+            worker_id=worker.worker_id if worker else None,
+            gate_id=event.gate_id,
+            metadata={
+                "alert_type": _alert_type,
+                "severity": _severity,
+                "reasons": reasons,
+            },
+        )
+
+    logger.info(
+        "Gate event finalization complete | "
+        "event_id=%s verdict=%s worker_id=%s",
+        event.event_id,
+        verdict,
+        worker.worker_id if worker else None,
+    )
+
 
 
 def _evaluate(db: Session, event: GateEvent, force: bool = False) -> bool:
@@ -502,68 +927,289 @@ async def finalize_attempt(event_id: str):
             db.close()
 
 
+
 @router.websocket("/attempts/{event_id}/stream")
 async def entry_stream(websocket: WebSocket, event_id: str) -> None:
     await websocket.accept()
+
+    logger.info(
+        "Entry stream connected | event_id=%s",
+        event_id,
+    )
+
     tracker = PersonTracker()
     db = SessionLocal()
+
     try:
         event = db.get(GateEvent, event_id)
+
         if event is None:
-            await websocket.send_json({"type": "error", "message": "Entry attempt not found"})
+            logger.warning(
+                "Entry attempt not found | event_id=%s",
+                event_id,
+            )
+
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": "Entry attempt not found",
+                }
+            )
             return
-        await websocket.send_json({"type": "entry_meta", "entry": _event_dict(event)})
+
+        logger.info(
+            "Entry attempt loaded | "
+            "event_id=%s gate_id=%s worker_id=%s lifecycle=%s",
+            event.event_id,
+            event.gate_id,
+            event.worker_id,
+            event.lifecycle,
+        )
+
+        await websocket.send_json(
+            {
+                "type": "entry_meta",
+                "entry": _event_dict(event),
+            }
+        )
+
     finally:
         db.close()
+
     try:
         while True:
             message = await websocket.receive()
+
             if message.get("type") == "websocket.disconnect":
+                logger.info(
+                    "Entry stream disconnected | event_id=%s",
+                    event_id,
+                )
                 break
+
             frame = message.get("bytes")
+
             if frame is None:
                 continue
+
             if len(frame) > MAX_FRAME_BYTES:
-                await websocket.send_json({"type": "error", "message": "Frame is too large"})
-                continue
-            async with _event_locks.setdefault(event_id, asyncio.Lock()):
-                async with vision_lock:
-                    output, detections, yolo_ms, faces, face_ms, face_error, _, persons, pose_ms = await asyncio.to_thread(
-                        infer_frame, frame, .5, tracker
-                    )
-                    evidence = await asyncio.to_thread(_frame_evidence, frame, persons, faces)
-                db = SessionLocal()
-                try:
-                    event = db.get(GateEvent, event_id)
-                    if event is None:
-                        await websocket.send_json({"type": "error", "message": "Entry attempt not found"})
-                        return
-                    if event.lifecycle == "ACTIVE":
-                        state = _load(event.evidence_json, {"frames": []})
-                        state.setdefault("frames", []).append(evidence)
-                        state["frames"] = state["frames"][-WINDOW:]
-                        if not state.get("subject_started_at") and (evidence["identity"]["state"] != "NONE" or persons):
-                            state["subject_started_at"] = evidence["at"]
-                        event.evidence_json = _dump(state)
-                        _evaluate(db, event)
-                        db.commit()
-                        db.refresh(event)
-                    metadata = {
-                        "type": "frame_meta", "entry": _event_dict(event), "detections": detections,
-                        "persons": persons, "faces": faces, "inference_ms": round(yolo_ms, 1),
-                        "pose_inference_ms": round(pose_ms, 1), "face_inference_ms": round(face_ms, 1),
+                logger.warning(
+                    "Frame rejected because it is too large | "
+                    "event_id=%s size=%s max=%s",
+                    event_id,
+                    len(frame),
+                    MAX_FRAME_BYTES,
+                )
+
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": "Frame is too large",
                     }
+                )
+                continue
+
+            async with _event_locks.setdefault(
+                event_id,
+                asyncio.Lock(),
+            ):
+                async with vision_lock:
+
+                    # -------------------------------------------------
+                    # AI inference
+                    # -------------------------------------------------
+
+                    (
+                        output,
+                        detections,
+                        yolo_ms,
+                        faces,
+                        face_ms,
+                        face_error,
+                        live_summary,
+                        person_results,
+                        pose_ms,
+                    ) = await asyncio.to_thread(
+                        infer_frame,
+                        frame,
+                        .5,
+                        tracker,
+                    )
+
+                    evidence = await asyncio.to_thread(
+                        _frame_evidence,
+                        frame,
+                        person_results,
+                        faces,
+                    )
+
+                    logger.info(
+                        "Inference completed | "
+                        "event_id=%s detections=%s faces=%s persons=%s "
+                        "yolo_ms=%.1f pose_ms=%.1f face_ms=%.1f identity=%s",
+                        event_id,
+                        len(detections),
+                        len(faces),
+                        len(person_results),
+                        yolo_ms,
+                        pose_ms,
+                        face_ms,
+                        evidence.get("identity", {}).get("state"),
+                    )
+
+                db = SessionLocal()
+
+                try:
+                    event = db.get(
+                        GateEvent,
+                        event_id,
+                    )
+
+                    if event is None:
+                        logger.warning(
+                            "Entry attempt disappeared during stream | "
+                            "event_id=%s",
+                            event_id,
+                        )
+
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "message": "Entry attempt not found",
+                            }
+                        )
+                        return
+
+                    if event.lifecycle == "ACTIVE":
+
+                        state = _load(
+                            event.evidence_json,
+                            {"frames": []},
+                        )
+
+                        state.setdefault(
+                            "frames",
+                            [],
+                        ).append(evidence)
+
+                        state["frames"] = state["frames"][-WINDOW:]
+
+                        # Detect when a subject first appears.
+                        subject_detected = (
+                            evidence["identity"]["state"] != "NONE"
+                            or bool(person_results)
+                        )
+
+                        if (
+                            not state.get("subject_started_at")
+                            and subject_detected
+                        ):
+                            state["subject_started_at"] = evidence["at"]
+
+                            logger.info(
+                                "Subject detected | "
+                                "event_id=%s timestamp=%s",
+                                event_id,
+                                evidence["at"],
+                            )
+
+                        event.evidence_json = _dump(state)
+
+                        # -------------------------------------------------
+                        # Evaluate attendance + PPE compliance
+                        # -------------------------------------------------
+
+                        previous_lifecycle = event.lifecycle
+                        previous_verdict = event.verdict
+
+                        _evaluate(
+                            db,
+                            event,
+                        )
+
+                        logger.info(
+                            "Event evaluated | "
+                            "event_id=%s lifecycle=%s->%s "
+                            "verdict=%s->%s worker_id=%s",
+                            event_id,
+                            previous_lifecycle,
+                            event.lifecycle,
+                            previous_verdict,
+                            event.verdict,
+                            event.worker_id,
+                        )
+
+                        db.commit()
+
+                        db.refresh(event)
+
+                        # -------------------------------------------------
+                        # IMPORTANT:
+                        # If _evaluate() finalized the event, attendance
+                        # and compliance have now been persisted.
+                        # -------------------------------------------------
+
+                        if event.lifecycle == "FINALIZED":
+                            logger.info(
+                                "Event finalized | "
+                                "event_id=%s verdict=%s worker_id=%s",
+                                event_id,
+                                event.verdict,
+                                event.worker_id,
+                            )
+
+                    metadata = {
+                        "type": "frame_meta",
+                        "entry": _event_dict(event),
+                        "detections": detections,
+                        "persons": person_results,
+                        "faces": faces,
+                        "inference_ms": round(yolo_ms, 1),
+                        "pose_inference_ms": round(pose_ms, 1),
+                        "face_inference_ms": round(face_ms, 1),
+                    }
+
                     if face_error:
                         metadata["face_error"] = face_error
+
+                        logger.warning(
+                            "Face inference error | "
+                            "event_id=%s error=%s",
+                            event_id,
+                            face_error,
+                        )
+
                 except Exception:
                     db.rollback()
+
+                    logger.exception(
+                        "Database/event processing failed | "
+                        "event_id=%s",
+                        event_id,
+                    )
+
                     raise
+
                 finally:
                     db.close()
+
             await websocket.send_json(metadata)
             await websocket.send_bytes(output)
+
     except (WebSocketDisconnect, RuntimeError):
+        logger.info(
+            "Entry stream closed | event_id=%s",
+            event_id,
+        )
         pass
+
+    except Exception:
+        logger.exception(
+            "Unexpected entry stream error | event_id=%s",
+            event_id,
+        )
+        raise
+
 
 
 @router.get("/sync/status")
@@ -603,13 +1249,53 @@ def ingest_synced_event(payload: dict[str, Any], authorization: str | None = Hea
     existing = db.get(GateEvent, event_id)
     if existing:
         if existing.payload_hash and existing.payload_hash != digest:
+            # Log conflict before raising so it is recorded in this session
+            create_audit_log(
+                db,
+                category="SYNC",
+                action="SYNC_CONFLICT",
+                status="CONFLICT",
+                message=(
+                    f"Sync conflict | event_id={event_id} "
+                    "payload hash mismatch"
+                ),
+                event_id=event_id,
+                metadata={"reason": "payload_hash_mismatch"},
+            )
+            db.commit()
             raise HTTPException(409, "The event ID already exists with a different payload")
+        create_audit_log(
+            db,
+            category="SYNC",
+            action="SYNC_DUPLICATE",
+            status="DUPLICATE",
+            message=f"Sync duplicate ignored | event_id={event_id}",
+            event_id=event_id,
+        )
+        db.commit()
         return {"event_id": event_id, "status": "SYNCED", "duplicate": True}
     worker_data = event_data.get("worker")
     worker = db.get(Worker, worker_data["worker_id"]) if worker_data else None
     gate = db.get(Gate, event_data["gate"]["gate_id"])
     device = db.get(Device, event_data["device"]["device_id"])
     if gate is None or device is None or (worker_data and worker is None):
+        create_audit_log(
+            db,
+            category="SYNC",
+            action="SYNC_MASTER_DATA_MISMATCH",
+            status="REJECTED",
+            message=(
+                f"Sync rejected | event_id={event_id} "
+                "master data mismatch (gate/device/worker not found)"
+            ),
+            event_id=event_id,
+            metadata={
+                "gate_missing": gate is None,
+                "device_missing": device is None,
+                "worker_missing": worker_data is not None and worker is None,
+            },
+        )
+        db.commit()
         raise HTTPException(409, "Central master data does not match the edge event")
     event = GateEvent(
         event_id=event_id, worker_id=worker.worker_id if worker else None, gate_id=gate.gate_id, device_id=device.device_id,
@@ -654,6 +1340,99 @@ def ingest_synced_event(payload: dict[str, Any], authorization: str | None = Hea
             db.add(AttendanceLog(event_id=event_id, worker_id=worker.worker_id, gate_id=gate.gate_id, entry_time=event.edge_timestamp, status="INSIDE"))
     if event.verdict == "DENIED" or any(reason in event_data.get("reasons", []) for reason in ("UNKNOWN_FACE", "MULTIPLE_IDENTITIES", "MULTIPLE_PERSONS")):
         db.add(Alert(event_id=event_id, gate_id=gate.gate_id, log_id=log.log_id if log else None, worker_id=worker.worker_id if worker else None, alert_type="GATE_COMPLIANCE_DENIED" if event.verdict == "DENIED" else "GATE_IDENTITY_HOLD", severity="CRITICAL" if event.verdict == "DENIED" else "WARNING", message="; ".join(event_data.get("reasons", [])), status="ACTIVE"))
+    # ---------------------------------------------------------
+    # Audit — sync ingestion
+    # ---------------------------------------------------------
+
+    verdict = event_data.get("verdict", "")
+
+    create_audit_log(
+        db,
+        category="SYNC",
+        action="SYNC_RECEIVED",
+        status="SYNCED",
+        message=f"Sync event ingested | event_id={event_id} verdict={verdict}",
+        event_id=event_id,
+        worker_id=worker.worker_id if worker else None,
+        gate_id=gate.gate_id,
+        metadata={
+            "verdict": verdict,
+            "offline": event_data.get("offline", False),
+            "reasons": event_data.get("reasons", []),
+        },
+    )
+
+    if worker and log:
+        sync_status_val = (
+            "COMPLIANT"
+            if verdict == "ALLOWED"
+            else "DENIED"
+            if verdict == "DENIED"
+            else "NON_COMPLIANT"
+        )
+        create_audit_log(
+            db,
+            category="SYNC",
+            action="SYNCED_COMPLIANCE",
+            status=sync_status_val,
+            message=(
+                f"Synced compliance record | "
+                f"log_id={log.log_id} verdict={verdict}"
+            ),
+            event_id=event_id,
+            worker_id=worker.worker_id,
+            gate_id=gate.gate_id,
+            metadata={
+                "log_id": log.log_id,
+                "final_verdict": verdict,
+                "overall_status": sync_status_val,
+                "confidence_score": event.evidence_confidence,
+            },
+        )
+
+        evidence = event_data.get("evidence", {})
+        for item in db.query(PpeItem).filter(PpeItem.name.in_(REQUIRED)).all():
+            ai_visual = evidence.get("visual", {}).get(item.name, {})
+            qr_visual = evidence.get("qr", {}).get(item.name, {})
+            for src, vis in (("AI", ai_visual), ("QR", qr_visual)):
+                create_audit_log(
+                    db,
+                    category="SYNC",
+                    action="SYNCED_PPE_DETECTION",
+                    status=vis.get("state", "UNKNOWN"),
+                    message=(
+                        f"Synced PPE detection | "
+                        f"ppe={item.name} source={src} "
+                        f"state={vis.get('state', 'UNKNOWN')}"
+                    ),
+                    event_id=event_id,
+                    worker_id=worker.worker_id,
+                    gate_id=gate.gate_id,
+                    metadata={
+                        "ppe_name": item.name,
+                        "detection_source": src,
+                        "detected": vis.get("state") == "CONFIRMED",
+                        "evidence_state": vis.get("state"),
+                        "confidence": vis.get("confidence"),
+                    },
+                )
+
+        if verdict == "ALLOWED":
+            create_audit_log(
+                db,
+                category="SYNC",
+                action="SYNCED_ATTENDANCE",
+                status="INSIDE",
+                message=(
+                    f"Synced attendance record | "
+                    f"worker_id={worker.worker_id} verdict=ALLOWED"
+                ),
+                event_id=event_id,
+                worker_id=worker.worker_id,
+                gate_id=gate.gate_id,
+                metadata={"entry_status": "INSIDE"},
+            )
+
     db.commit()
     return {"event_id": event_id, "status": "SYNCED", "duplicate": False}
 

@@ -29,7 +29,7 @@ export default function Live() {
   }, []);
 
   function startVerification() {
-    navigate('/entry/biometric');
+    window.open('/#/entry/biometric', '_blank', 'noopener,noreferrer');
   }
 
   function reset() {
