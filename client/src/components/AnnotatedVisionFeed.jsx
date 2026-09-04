@@ -1,211 +1,109 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, LoaderCircle, RefreshCw, WifiOff } from 'lucide-react';
+import { Camera, LoaderCircle, WifiOff } from 'lucide-react';
 
-const MAX_FRAME_WIDTH = 960;
-const TARGET_FPS = 12;
+const socketUrl = (id) => {
+  const base = import.meta.env.VITE_ENTRY_WS_URL?.replace(/\/$/, '');
+  if (base) return `${base}/${id}/stream`;
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.hostname}:8000/api/v1/entry/attempts/${id}/stream`;
+};
 
-function getWebSocketUrl(eventId) {
-  if (import.meta.env.VITE_ENTRY_WS_URL) return `${import.meta.env.VITE_ENTRY_WS_URL.replace(/\/$/, '')}/${eventId}/stream`;
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.hostname}:8000/api/v1/entry/attempts/${eventId}/stream`;
-}
+export default function AnnotatedVisionFeed({ sessionId, onEntry, onConnection, onError }) {
+  const video = useRef(null);
+  const canvas = useRef(null);
+  const imageUrl = useRef(null);
+  const [image, setImage] = useState(null);
+  const [message, setMessage] = useState('');
 
-export default function AnnotatedVisionFeed({ active, eventId, onConnectionChange, onFrameMeta }) {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const socketRef = useRef(null);
-  const mediaRef = useRef(null);
-  const timerRef = useRef(null);
-  const waitingRef = useRef(false);
-  const resultUrlRef = useRef(null);
-  const runRef = useRef(0);
-  const [resultUrl, setResultUrl] = useState(null);
-  const [_connection, setConnection] = useState('offline');
-  const [error, setError] = useState('');
-  const [retry, setRetry] = useState(0);
+  const fail = useCallback((text) => {
+    setMessage(text);
+    onError?.(text);
+  }, [onError]);
 
-  const updateConnection = useCallback((next) => {
-    setConnection(next);
-    onConnectionChange?.(next);
-  }, [onConnectionChange]);
-
-  const release = useCallback(() => {
-    runRef.current += 1;
-    if (timerRef.current !== null) window.clearInterval(timerRef.current);
-    timerRef.current = null;
-    const socket = socketRef.current;
-    socketRef.current = null;
-    if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
-    mediaRef.current?.getTracks().forEach((track) => track.stop());
-    mediaRef.current = null;
-    waitingRef.current = false;
-    if (videoRef.current) videoRef.current.srcObject = null;
-  }, []);
-
-  const sendFrame = useCallback(() => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const socket = socketRef.current;
-    if (!video || !canvas || !socket || socket.readyState !== WebSocket.OPEN ||
-        waitingRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
-        socket.bufferedAmount > 512_000) return;
-
-    const scale = Math.min(1, MAX_FRAME_WIDTH / video.videoWidth);
-    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-    const context = canvas.getContext('2d', { alpha: false });
-    if (!context) return;
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-    canvas.toBlob((blob) => {
-      if (!blob || socket.readyState !== WebSocket.OPEN) return;
-      waitingRef.current = true;
-      socket.send(blob);
-    }, 'image/jpeg', 0.78);
-  }, []);
-
-  /* The inactive transition must synchronously clear connection/frame UI with the camera cleanup. */
-  /* oxlint-disable react/set-state-in-effect */
   useEffect(() => {
-    if (!active) {
-      release();
-      updateConnection('offline');
-      setError('');
-      if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
-      resultUrlRef.current = null;
-      setResultUrl(null);
-      return undefined;
-    }
-
-    const run = runRef.current + 1;
-    runRef.current = run;
-    let cancelled = false;
-    const isCurrent = () => !cancelled && runRef.current === run;
-
-    async function start() {
-      setError('');
-      updateConnection('connecting');
-      try {
-        const media = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' },
-          audio: false,
-        });
-        if (!isCurrent()) {
-          media.getTracks().forEach((track) => track.stop());
-          return;
+    if (!sessionId) return undefined;
+    let media, timer, socket, waiting = false, complete = false, cancelled = false;
+    const stop = () => {
+      clearInterval(timer);
+      media?.getTracks().forEach((track) => track.stop());
+      if (socket?.readyState < WebSocket.CLOSING) socket.close();
+      onConnection?.('offline');
+    };
+    const send = () => {
+      if (waiting || socket?.readyState !== WebSocket.OPEN || video.current?.readyState < 2) return;
+      const scale = Math.min(1, 960 / video.current.videoWidth);
+      canvas.current.width = Math.round(video.current.videoWidth * scale);
+      canvas.current.height = Math.round(video.current.videoHeight * scale);
+      canvas.current.getContext('2d').drawImage(video.current, 0, 0, canvas.current.width, canvas.current.height);
+      canvas.current.toBlob((blob) => {
+        if (blob && socket.readyState === WebSocket.OPEN) {
+          waiting = true;
+          socket.send(blob);
         }
-        mediaRef.current = media;
-        if (!videoRef.current) throw new Error('Camera capture could not be initialized.');
-        videoRef.current.srcObject = media;
-        await videoRef.current.play();
-
-        if (!eventId) throw new Error('No entry attempt is active.');
-        const socket = new WebSocket(getWebSocketUrl(eventId));
-        let socketFailed = false;
+      }, 'image/jpeg', .8);
+    };
+    const start = async () => {
+      try {
+        onConnection?.('connecting');
+        media = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false });
+        if (cancelled) return stop();
+        video.current.srcObject = media;
+        await video.current.play();
+        socket = new WebSocket(socketUrl(sessionId));
         socket.binaryType = 'blob';
-        socketRef.current = socket;
         socket.onopen = () => {
-          if (!isCurrent()) return;
-          updateConnection('online');
-          sendFrame();
-          timerRef.current = window.setInterval(sendFrame, Math.round(1000 / TARGET_FPS));
+          onConnection?.('online');
+          send();
+          timer = setInterval(send, 100);
         };
         socket.onmessage = (event) => {
-          if (!isCurrent()) return;
-          if (typeof event.data === 'string') {
-            try {
-              const message = JSON.parse(event.data);
-              if (message.type === 'error') {
-                waitingRef.current = false;
-                setError(message.message || 'The inference server reported an error.');
-              } else if (message.type === 'frame_meta' || message.type === 'entry_meta') {
-                onFrameMeta?.(message);
-              }
-            } catch {
-              waitingRef.current = false;
-              setError('The inference server returned an invalid response.');
-            }
+          if (typeof event.data !== 'string') {
+            const next = URL.createObjectURL(event.data);
+            if (imageUrl.current) URL.revokeObjectURL(imageUrl.current);
+            imageUrl.current = next;
+            setImage(next);
+            waiting = false;
             return;
           }
-          const nextUrl = URL.createObjectURL(event.data);
-          if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
-          resultUrlRef.current = nextUrl;
-          setResultUrl(nextUrl);
-          waitingRef.current = false;
+          const data = JSON.parse(event.data);
+          if (data.entry) onEntry?.(data.entry);
+          if (data.type === 'error') {
+            waiting = false;
+            fail(data.message || 'Inference failed');
+          }
+          if (data.type === 'session_complete') {
+            complete = true;
+            stop();
+          }
         };
-        socket.onerror = () => {
-          if (!isCurrent()) return;
-          socketFailed = true;
-          updateConnection('error');
-          setError(`Could not connect to the vision server at ${getWebSocketUrl()}.`);
-        };
+        socket.onerror = () => fail('Could not connect to the vision server.');
         socket.onclose = () => {
-          if (!isCurrent()) return;
-          waitingRef.current = false;
-          updateConnection(socketFailed ? 'error' : 'offline');
-          setError((current) => current || 'The vision server disconnected.');
-          if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
-          resultUrlRef.current = null;
-          setResultUrl(null);
-          release();
+          stop();
+          if (!complete && !cancelled) fail('Vision stream disconnected.');
         };
-      } catch (caught) {
-        if (!isCurrent()) return;
-        updateConnection('error');
-        setError(caught instanceof Error ? caught.message : 'Camera access failed.');
-        release();
+      } catch (error) {
+        fail(error.message || 'Camera access failed.');
+        stop();
       }
-    }
-
-    void start();
+    };
+    start();
     return () => {
       cancelled = true;
-      release();
+      stop();
     };
-  }, [active, eventId, onFrameMeta, release, retry, sendFrame, updateConnection]);
-  /* oxlint-enable react/set-state-in-effect */
+  }, [fail, onConnection, onEntry, sessionId]);
 
-  useEffect(() => () => {
-    release();
-    if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
-  }, [release]);
+  useEffect(() => () => imageUrl.current && URL.revokeObjectURL(imageUrl.current), []);
 
   return (
-    <div className="relative w-full h-full min-h-[420px] bg-[#020604] overflow-hidden">
-      {/* These capture frames but are never visible. Only server-annotated output is rendered. */}
-      <video ref={videoRef} muted playsInline className="absolute w-px h-px opacity-0 pointer-events-none" aria-hidden="true" />
-      <canvas ref={canvasRef} className="hidden" aria-hidden="true" />
-
-      {resultUrl ? (
-        <img src={resultUrl} alt="Live annotated PPE and identity detection" className="absolute inset-0 h-full w-full object-contain bg-black" />
-      ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center text-textMuted">
-          {error ? (
-            <WifiOff size={36} className="text-danger" />
-          ) : active ? (
-            <div className="relative flex items-center justify-center">
-              <LoaderCircle size={38} className="animate-spin text-safety" />
-              <div className="absolute inset-0 rounded-full animate-ping bg-safety/20 -z-10" />
-            </div>
-          ) : (
-            <Camera size={34} />
-          )}
-          <div>
-            <div className="text-sm font-semibold text-text">
-              {error ? 'Stream unavailable' : active ? 'Initializing AI Camera…' : 'Camera is idle'}
-            </div>
-            <div className="mt-1 text-xs text-textSecondary">
-              {error || (active ? 'Starting camera feed and loading vision inference…' : 'Start verification to begin live detection.')}
-            </div>
-          </div>
-          {error && active && (
-            <button type="button" onClick={() => setRetry((value) => value + 1)} className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-textSecondary hover:border-safety/50 hover:text-text transition focus-ring">
-              <RefreshCw size={12} /> RETRY STREAM
-            </button>
-          )}
+    <div className="relative h-full min-h-[420px] overflow-hidden bg-black">
+      <video ref={video} muted playsInline className="hidden" />
+      <canvas ref={canvas} className="hidden" />
+      {image ? <img src={image} alt="Live annotated entry scan" className="absolute inset-0 h-full w-full object-contain" /> : (
+        <div className="absolute inset-0 grid place-items-center text-center text-textMuted">
+          <div>{message ? <WifiOff className="mx-auto mb-3 text-danger" size={36} /> : sessionId ? <LoaderCircle className="mx-auto mb-3 animate-spin text-safety" size={36} /> : <Camera className="mx-auto mb-3" size={36} />}<p className="text-sm">{message || (sessionId ? 'Starting camera…' : 'Camera is idle')}</p></div>
         </div>
       )}
-
-      {resultUrl && <div className="absolute left-3 top-3 mono text-[0.65rem] px-2 py-1 rounded bg-black/70 border border-safety/40 text-safety"><span className="inline-block w-1.5 h-1.5 rounded-full bg-safety mr-1.5 animate-pulseGlow" />ANNOTATED LIVE</div>}
+      {image && <span className="absolute left-3 top-3 rounded bg-black/70 px-2 py-1 font-mono text-[10px] text-safety">LIVE · ANNOTATED</span>}
     </div>
   );
 }

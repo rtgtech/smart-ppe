@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import AnnotatedVisionFeed from './AnnotatedVisionFeed';
 import GateFlow from './GateFlow';
-import { createEntryAttempt, getEntryAttempt, resetEntrySession } from '../services/gateCheck';
 import { EntryContext } from './entry-context';
+import { createEntryAttempt, discardEntryAttempt, getEntryAttempt } from '../services/gateCheck';
 
-const EVENT_KEY = 'suraksha_entry_event_id';
-const ACTUATED_KEY = 'suraksha_entry_actuated_event_id';
+const KEY = 'suraksha_entry_session';
 
 export default function EntryLayout() {
   const navigate = useNavigate();
@@ -14,75 +13,45 @@ export default function EntryLayout() {
   const [entry, setEntry] = useState(null);
   const [connection, setConnection] = useState('offline');
   const [error, setError] = useState('');
-  const audioRef = useRef(null);
 
-  const step = location.pathname.endsWith('/compliance') ? 2 : 1;
-
-  const routeFor = useCallback((next) => {
-    if (!next) return;
-    if (next.lifecycle === 'FINALIZED' || next.phase === 'EVIDENCE') navigate('/entry/compliance', { replace: true });
-    else navigate('/entry/biometric', { replace: true });
+  const accept = useCallback((value) => {
+    setEntry(value);
+    setError('');
+    navigate(value.phase === 'IDENTITY' ? '/entry/biometric' : '/entry/compliance', { replace: true });
   }, [navigate]);
 
-  const acceptEntry = useCallback((next) => {
-    setEntry(next);
-    setError('');
-    routeFor(next);
-    if (next?.lifecycle === 'FINALIZED' && next.verdict === 'DENIED' && sessionStorage.getItem(ACTUATED_KEY) !== next.event_id) {
-      sessionStorage.setItem(ACTUATED_KEY, next.event_id);
-      const audio = audioRef.current;
-      if (audio) {
-        const oscillator = audio.createOscillator();
-        const gain = audio.createGain();
-        oscillator.frequency.value = 720;
-        gain.gain.setValueAtTime(.18, audio.currentTime);
-        gain.gain.exponentialRampToValueAtTime(.001, audio.currentTime + .7);
-        oscillator.connect(gain).connect(audio.destination);
-        oscillator.start();
-        oscillator.stop(audio.currentTime + .7);
-      }
-    }
-  }, [routeFor]);
-
   useEffect(() => {
-    const eventId = sessionStorage.getItem(EVENT_KEY);
-    if (eventId) getEntryAttempt(eventId).then(acceptEntry).catch(() => sessionStorage.removeItem(EVENT_KEY));
-  }, [acceptEntry]);
+    const id = sessionStorage.getItem(KEY);
+    if (id) getEntryAttempt(id).then(accept).catch(() => sessionStorage.removeItem(KEY));
+  }, [accept]);
 
   const start = useCallback(async () => {
     try {
-      if (!audioRef.current) audioRef.current = new AudioContext();
-      await audioRef.current.resume();
-      const eventId = crypto.randomUUID();
-      sessionStorage.setItem(EVENT_KEY, eventId);
-      const next = await createEntryAttempt(eventId);
-      acceptEntry(next);
+      const id = crypto.randomUUID();
+      sessionStorage.setItem(KEY, id);
+      accept(await createEntryAttempt(id));
     } catch (caught) {
-      setError(caught.message || 'The edge gate service is unavailable. The barrier remains locked.');
+      setError(caught.message || 'Could not start the scan.');
     }
-  }, [acceptEntry]);
+  }, [accept]);
 
   const nextWorker = useCallback(() => {
-    resetEntrySession();
-    sessionStorage.removeItem(EVENT_KEY);
+    const id = entry?.session_id;
+    if (id) discardEntryAttempt(id).catch(() => {});
+    sessionStorage.removeItem(KEY);
     setEntry(null);
     setError('');
     navigate('/entry/biometric', { replace: true });
-  }, [navigate]);
-
-  const handleMeta = useCallback((meta) => {
-    if (meta.entry) acceptEntry(meta.entry);
-  }, [acceptEntry]);
+  }, [entry, navigate]);
 
   const context = useMemo(() => ({ entry, connection, error, start, nextWorker }), [entry, connection, error, start, nextWorker]);
-
   return (
     <EntryContext.Provider value={context}>
-      <GateFlow step={step}>
+      <GateFlow step={location.pathname.endsWith('/compliance') ? 2 : 1}>
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
           <div className="panel relative min-h-[560px] overflow-hidden">
-            <AnnotatedVisionFeed active={entry?.lifecycle === 'ACTIVE'} eventId={entry?.event_id} onConnectionChange={setConnection} onFrameMeta={handleMeta} />
-            {!entry && <div className="absolute inset-0 grid place-items-center bg-black/45"><button onClick={start} className="rounded-md bg-safety px-7 py-3 text-xs font-bold uppercase tracking-wide text-onSafety shadow-glow">Start entry scan</button></div>}
+            <AnnotatedVisionFeed key={entry?.session_id || 'idle'} sessionId={entry?.session_id} onEntry={accept} onConnection={setConnection} onError={setError} />
+            {!entry && <div className="absolute inset-0 grid place-items-center bg-black/45"><button onClick={start} className="rounded-md bg-safety px-7 py-3 text-xs font-bold uppercase text-onSafety shadow-glow">Start entry scan</button></div>}
           </div>
           <Outlet />
         </div>
