@@ -18,6 +18,8 @@ class Settings(BaseModel):
     assistant_api_token: str = os.getenv("ASSISTANT_API_TOKEN", "")
     google_api_key: str = os.getenv("GOOGLE_API_KEY", "")
     gemini_live_model: str = os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
+    voice_handshake_timeout_seconds: float = float(os.getenv("VOICE_HANDSHAKE_TIMEOUT_SECONDS", "15"))
+    voice_handshake_attempts: int = int(os.getenv("VOICE_HANDSHAKE_ATTEMPTS", "2"))
     entry_identity_timeout_seconds: float = float(os.getenv("ENTRY_IDENTITY_TIMEOUT_SECONDS", "10"))
     entry_evidence_timeout_seconds: float = float(os.getenv("ENTRY_EVIDENCE_TIMEOUT_SECONDS", "15"))
     entry_person_min_height_ratio: float = float(os.getenv("ENTRY_PERSON_MIN_HEIGHT_RATIO", "0.60"))

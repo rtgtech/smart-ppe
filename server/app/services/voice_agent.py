@@ -11,10 +11,14 @@ from pydantic import ValidationError
 from app.core.config import Settings
 from app.schemas.voice import VoiceSessionStart, VoiceSessionStop
 from app.services.voice_tools import (
+    GET_VIOLATIONS_TOOL,
     LIST_RECENT_WORKERS_TOOL,
     LIST_WORKER_NAMES_TOOL,
+    TODAY_PPE_VIOLATIONS_TOOL,
+    execute_get_violations,
     execute_list_recent_workers,
     execute_list_worker_names,
+    execute_today_ppe_violations,
 )
 
 logger = logging.getLogger("suraksha.voice")
@@ -30,9 +34,21 @@ needs help identifying a worker. Use list_recent_workers when the user asks whic
 added recently, today, or in the last 24 hours. Employee codes are provided only to disambiguate
 duplicate names.
 
-Attendance, violations, safety scores, and all other operational-data access are not connected yet.
-If asked for those values, clearly say they are unavailable. Never guess or fabricate data. Do not
-mention internal implementation details unless the user explicitly asks.
+Use get_today_ppe_violations whenever the user asks for today's PPE violations, today's missing-PPE
+totals, or a breakdown by PPE item. Treat total_violations as missing item occurrences and
+violation_events as the number of affected entry events. Do not combine or confuse those values.
+
+Use get_violations for violation details, the latest violations, violations by a named worker, or
+violations on today, yesterday, or a specific date. Omit both arguments for the latest details.
+Pass dates as today, yesterday, or YYYY-MM-DD. If it returns AMBIGUOUS_WORKER, ask the user to choose
+one candidate. If it returns WORKER_NOT_FOUND, say so. A violation_count of zero is a valid answer;
+state clearly that no matching violations were found and never invent records. For phrases such as
+"this person" or "that worker", use the most recently and unambiguously named worker in the
+conversation; if there is none, ask for the worker's name instead of querying all workers.
+
+Attendance, safety scores, and all other operational-data access are not connected yet. If asked
+for those values, clearly say they are unavailable. Never guess or fabricate data. Do not mention
+internal implementation details unless the user explicitly asks.
 """.strip()
 
 
@@ -96,10 +112,68 @@ def live_config() -> Any:
                         ),
                         parameters_json_schema={"type": "object", "properties": {}},
                     ),
+                    types.FunctionDeclaration(
+                        name=TODAY_PPE_VIOLATIONS_TOOL,
+                        description=(
+                            "Return today's non-demo PPE violation totals for India time, grouped "
+                            "by missing PPE item, plus the number of affected entry events."
+                        ),
+                        parameters_json_schema={"type": "object", "properties": {}},
+                    ),
+                    types.FunctionDeclaration(
+                        name=GET_VIOLATIONS_TOOL,
+                        description=(
+                            "Get non-demo violation details, optionally filtered by worker name or "
+                            "employee code and by today, yesterday, or one YYYY-MM-DD date. With no "
+                            "arguments, return the latest violation details."
+                        ),
+                        parameters_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "worker_name": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional worker name or employee code. Omit for all workers."
+                                    ),
+                                    "minLength": 2,
+                                    "maxLength": 100,
+                                },
+                                "date": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional: today, yesterday, latest, or YYYY-MM-DD. "
+                                        "Omit for latest records across dates."
+                                    ),
+                                },
+                            },
+                            "additionalProperties": False,
+                        },
+                    ),
                 ]
             )
         ],
     )
+
+
+def create_client(settings: Settings) -> Any:
+    genai, _ = _genai_modules()
+    client = genai.Client(
+        api_key=settings.google_api_key,
+        http_options={
+            "api_version": "v1beta",
+            "async_client_args": {
+                "open_timeout": settings.voice_handshake_timeout_seconds,
+            },
+        },
+    )
+    # The SDK doesn't expose these WebSocket transport arguments publicly. Enabling
+    # Happy Eyeballs prevents an unavailable IPv6 route from consuming the entire
+    # opening-handshake timeout before IPv4 is attempted.
+    websocket_options = getattr(client._api_client, "_websocket_ssl_ctx", None)
+    if isinstance(websocket_options, dict):
+        websocket_options.setdefault("happy_eyeballs_delay", 0.25)
+        websocket_options.setdefault("interleave", 1)
+    return client
 
 
 async def receive_start(websocket: WebSocket) -> VoiceSessionStart:
@@ -203,20 +277,33 @@ async def _handle_tool_calls(runtime: VoiceRuntime, live_session: Any, tool_call
     _, types = _genai_modules()
     responses = []
     for function_call in tool_call.function_calls:
-        if function_call.name in {LIST_WORKER_NAMES_TOOL, LIST_RECENT_WORKERS_TOOL}:
+        if function_call.name in {
+            LIST_WORKER_NAMES_TOOL,
+            LIST_RECENT_WORKERS_TOOL,
+            TODAY_PPE_VIOLATIONS_TOOL,
+            GET_VIOLATIONS_TOOL,
+        }:
             try:
-                executor = (
-                    execute_list_worker_names
-                    if function_call.name == LIST_WORKER_NAMES_TOOL
-                    else execute_list_recent_workers
-                )
-                result = await asyncio.to_thread(executor)
+                if function_call.name == GET_VIOLATIONS_TOOL:
+                    arguments = function_call.args or {}
+                    result = await asyncio.to_thread(
+                        execute_get_violations,
+                        arguments.get("worker_name"),
+                        arguments.get("date"),
+                    )
+                else:
+                    executor = {
+                        LIST_WORKER_NAMES_TOOL: execute_list_worker_names,
+                        LIST_RECENT_WORKERS_TOOL: execute_list_recent_workers,
+                        TODAY_PPE_VIOLATIONS_TOOL: execute_today_ppe_violations,
+                    }[function_call.name]
+                    result = await asyncio.to_thread(executor)
                 payload = {"ok": True, "result": result}
                 logger.info(
-                    "Voice tool completed session=%s tool=%s count=%d",
+                    "Voice tool completed session=%s tool=%s result_keys=%s",
                     runtime.session_id[:8],
                     function_call.name,
-                    result["count"],
+                    ",".join(sorted(result)),
                 )
             except Exception:
                 logger.exception(
@@ -224,7 +311,7 @@ async def _handle_tool_calls(runtime: VoiceRuntime, live_session: Any, tool_call
                     runtime.session_id[:8],
                     function_call.name,
                 )
-                payload = {"ok": False, "error": "worker_lookup_failed"}
+                payload = {"ok": False, "error": "tool_execution_failed"}
         else:
             payload = {"ok": False, "error": "unknown_tool"}
 
@@ -238,6 +325,36 @@ async def _handle_tool_calls(runtime: VoiceRuntime, live_session: Any, tool_call
 
     async with runtime.gemini_lock:
         await live_session.send_tool_response(function_responses=responses)
+
+
+async def _serve_live_session(runtime: VoiceRuntime, live_session: Any) -> None:
+    await runtime.send_json({"type": "status", "state": "listening"})
+    tasks = [
+        asyncio.create_task(_receive_from_browser(runtime)),
+        asyncio.create_task(_send_audio_to_gemini(runtime, live_session)),
+        asyncio.create_task(_receive_from_gemini(runtime, live_session)),
+    ]
+    stop_waiter = asyncio.create_task(runtime.stop_event.wait())
+    finished, _ = await asyncio.wait(
+        [*tasks, stop_waiter], return_when=asyncio.FIRST_COMPLETED
+    )
+    failure = next(
+        (
+            task.exception()
+            for task in finished
+            if task is not stop_waiter
+            and not task.cancelled()
+            and task.exception()
+        ),
+        None,
+    )
+    runtime.stop_event.set()
+    stop_waiter.cancel()
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, stop_waiter, return_exceptions=True)
+    if failure:
+        raise failure
 
 
 async def run_voice_session(
@@ -258,7 +375,7 @@ async def run_voice_session(
         return
 
     try:
-        genai, _ = _genai_modules()
+        _genai_modules()
     except ImportError:
         await runtime.send_json(
             {
@@ -270,45 +387,51 @@ async def run_voice_session(
         )
         return
 
-    client = genai.Client(
-        api_key=settings.google_api_key,
-        http_options={"api_version": "v1beta"},
-    )
+    client = create_client(settings)
     await runtime.send_json({"type": "status", "state": "connecting"})
     try:
-        async with client.aio.live.connect(
-            model=settings.gemini_live_model,
-            config=live_config(),
-        ) as live_session:
-            await runtime.send_json({"type": "status", "state": "listening"})
-            tasks = [
-                asyncio.create_task(_receive_from_browser(runtime)),
-                asyncio.create_task(_send_audio_to_gemini(runtime, live_session)),
-                asyncio.create_task(_receive_from_gemini(runtime, live_session)),
-            ]
-            stop_waiter = asyncio.create_task(runtime.stop_event.wait())
-            finished, _ = await asyncio.wait(
-                [*tasks, stop_waiter], return_when=asyncio.FIRST_COMPLETED
-            )
-            failure = next(
-                (
-                    task.exception()
-                    for task in finished
-                    if task is not stop_waiter
-                    and not task.cancelled()
-                    and task.exception()
-                ),
-                None,
-            )
-            runtime.stop_event.set()
-            stop_waiter.cancel()
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, stop_waiter, return_exceptions=True)
-            if failure:
-                raise failure
+        attempts = max(1, settings.voice_handshake_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                async with client.aio.live.connect(
+                    model=settings.gemini_live_model,
+                    config=live_config(),
+                ) as live_session:
+                    await _serve_live_session(runtime, live_session)
+                    return
+            except TimeoutError:
+                if attempt >= attempts:
+                    raise
+                logger.warning(
+                    "Gemini handshake timed out session=%s attempt=%d/%d; retrying",
+                    runtime.session_id[:8],
+                    attempt,
+                    attempts,
+                )
+                await runtime.send_json(
+                    {
+                        "type": "status",
+                        "state": "connecting",
+                        "attempt": attempt + 1,
+                    }
+                )
+                await asyncio.sleep(0.75 * attempt)
     except asyncio.CancelledError:
         raise
+    except TimeoutError:
+        logger.exception("Gemini Live handshake timed out session=%s", runtime.session_id[:8])
+        with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+            await runtime.send_json(
+                {
+                    "type": "error",
+                    "code": "gemini_handshake_timeout",
+                    "message": (
+                        "The voice service could not reach Gemini. Check the internet connection "
+                        "and try again."
+                    ),
+                    "recoverable": True,
+                }
+            )
     except Exception as exc:
         logger.exception("Gemini Live session failed session=%s", runtime.session_id[:8])
         with contextlib.suppress(RuntimeError, WebSocketDisconnect):

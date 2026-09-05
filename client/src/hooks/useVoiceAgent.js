@@ -143,12 +143,6 @@ export function useVoiceAgent() {
       socket.onopen = () => {
         if (operation !== operationRef.current) return socket.close();
         socket.send(JSON.stringify({ type: 'session.start', sessionId, mode: nextMode }));
-        void startCapture(stream, socket, operation).catch((caught) => {
-          sessionErrorRef.current = true;
-          setError(caught instanceof Error ? caught.message : 'Audio capture could not start.');
-          setStatus('error');
-          socket.close(1011, 'audio-capture-failed');
-        });
       };
       socket.onmessage = (event) => {
         if (operation !== operationRef.current) return;
@@ -160,7 +154,17 @@ export function useVoiceAgent() {
           const message = JSON.parse(event.data);
           if (message.sessionId && message.sessionId !== sessionIdRef.current) return;
           if (message.type === 'audio.clear') clearPlayback();
-          if (message.type === 'status' && message.state) setStatus(message.state);
+          if (message.type === 'status' && message.state) {
+            setStatus(message.state);
+            if (message.state === 'listening' && !captureNodeRef.current) {
+              void startCapture(stream, socket, operation).catch((caught) => {
+                sessionErrorRef.current = true;
+                setError(caught instanceof Error ? caught.message : 'Audio capture could not start.');
+                setStatus('error');
+                socket.close(1011, 'audio-capture-failed');
+              });
+            }
+          }
           if (message.type === 'transcript' && message.speaker && message.text) {
             setTranscript((lines) => [...lines.slice(-2), {
               speaker: message.speaker,

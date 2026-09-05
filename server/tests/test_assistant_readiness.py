@@ -1,5 +1,6 @@
 import unittest
 import uuid
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -7,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.v1.routes.assistant_queries import resolve_worker, worker_attendance, worker_safety_summary
 from app.models import AuditLog, AttendanceLog, Base, ComplianceLog, Department, Device, Gate, GateEvent, Mine, PpeDetection, PpeItem, Worker
-from app.services.entry_persistence import persist_entry_session
+from app.services.entry_persistence import entry_alert_details, persist_entry_session
 from app.services.entry_pipeline import EntrySession
 
 
@@ -64,6 +65,44 @@ class AssistantReadinessTest(unittest.TestCase):
         self.assertEqual(resolve_worker("worker1", False, self.db)["status"], "RESOLVED")
         self.assertEqual(len(worker_attendance(self.worker.worker_id, None, None, 20, False, self.db)["records"]), 1)
         self.assertEqual(worker_safety_summary(self.worker.worker_id, 30, False, self.db)["score"], 100.0)
+
+    def test_ppe_alert_identifies_worker_location_and_missing_item(self):
+        alert_type, message = entry_alert_details(
+            SimpleNamespace(reasons=["HELMET_NOT_WORN"]),
+            SimpleNamespace(name="Ravi Kumar"),
+            SimpleNamespace(name="Gate 02", location="Zone B"),
+        )
+        self.assertEqual(alert_type, "PPE_VIOLATION")
+        self.assertEqual(
+            message,
+            "Ravi Kumar entered Zone B without a safety helmet. "
+            "Missing required PPE: safety helmet.",
+        )
+
+    def test_unidentified_alert_includes_location_and_exact_reason(self):
+        alert_type, message = entry_alert_details(
+            SimpleNamespace(reasons=["IDENTITY_NOT_CONFIRMED"]),
+            None,
+            SimpleNamespace(name="Gate 02", location="Zone B"),
+        )
+        self.assertEqual(alert_type, "IDENTITY_VIOLATION")
+        self.assertEqual(
+            message,
+            "Unidentified person detected at Zone B. Exact reason: identity not confirmed.",
+        )
+
+    def test_ppe_alert_uses_recognized_name_when_worker_row_is_unlinked(self):
+        alert_type, message = entry_alert_details(
+            SimpleNamespace(
+                reasons=["VEST_NOT_WORN"],
+                worker={"name": "Registry Worker"},
+            ),
+            None,
+            SimpleNamespace(name="Gate 02", location="Zone B"),
+        )
+        self.assertEqual(alert_type, "PPE_VIOLATION")
+        self.assertIn("Registry Worker entered Zone B", message)
+        self.assertIn("safety vest", message)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import AnnotatedVisionFeed from './AnnotatedVisionFeed';
 import GateFlow from './GateFlow';
 import { EntryContext } from './entry-context';
 import { createEntryAttempt, discardEntryAttempt, getEntryAttempt } from '../services/gateCheck';
+import { announceEntryViolation, prepareViolationAudio } from '../services/violationAnnouncements';
 
 const KEY = 'suraksha_entry_session';
 
@@ -17,6 +18,13 @@ export default function EntryLayout() {
   const accept = useCallback((value) => {
     setEntry(value);
     setError('');
+    if (value.lifecycle === 'FINALIZED' && value.verdict !== 'ALLOWED') {
+      const announcementKey = `suraksha_violation_announced:${value.event_id}`;
+      if (!sessionStorage.getItem(announcementKey)) {
+        sessionStorage.setItem(announcementKey, '1');
+        void announceEntryViolation(value);
+      }
+    }
     navigate(value.phase === 'IDENTITY' ? '/entry/biometric' : '/entry/compliance', { replace: true });
   }, [navigate]);
 
@@ -27,6 +35,7 @@ export default function EntryLayout() {
 
   const start = useCallback(async () => {
     try {
+      void prepareViolationAudio();
       const id = crypto.randomUUID();
       sessionStorage.setItem(KEY, id);
       accept(await createEntryAttempt(id));

@@ -77,8 +77,8 @@ export default function Alerts() {
                 <span className="mono text-[0.65rem] text-textMuted">{a.id}</span>
               </div>
               <div className="text-xs text-textSecondary">
-                {a.worker !== '—' && <span className="text-text font-medium">{a.worker}</span>}
-                {a.worker !== '—' && ' · '}
+                {a.worker !== '—' && !a.detail.startsWith(`${a.worker} `) && <span className="text-text font-medium">{a.worker}</span>}
+                {a.worker !== '—' && !a.detail.startsWith(`${a.worker} `) && ' · '}
                 {a.detail} · {a.gate} · <span className="mono">{a.time}</span>
               </div>
               <div className="text-[0.68rem] text-textMuted mt-1">Assigned: {a.officer} · Status: {a.status}</div>

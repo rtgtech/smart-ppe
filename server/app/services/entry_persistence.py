@@ -15,6 +15,55 @@ from app.services.entry_pipeline import EntrySession
 
 
 PPE_STORAGE_NAMES = {"Helmet": "Helmet", "Vest": "Vest", "Boots": "Shoes"}
+PPE_REASON_NAMES = {
+    "HELMET_NOT_WORN": "safety helmet",
+    "VEST_NOT_WORN": "safety vest",
+    "BOOTS_NOT_WORN": "safety boots",
+}
+REASON_LABELS = {
+    "IDENTITY_NOT_CONFIRMED": "identity not confirmed",
+    "MULTIPLE_KNOWN_FACES": "multiple identified persons detected",
+    "IDENTITY_CHANGED_DURING_PPE_CHECK": "worker identity changed during the PPE check",
+    "PPE_CHECK_INCONCLUSIVE": "PPE check inconclusive",
+    "SCAN_CANCELLED": "entry scan cancelled",
+}
+
+
+def _join_words(values: list[str]) -> str:
+    if len(values) < 2:
+        return "".join(values)
+    if len(values) == 2:
+        return " and ".join(values)
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
+def entry_alert_details(session: EntrySession, worker: Worker | None, gate) -> tuple[str, str]:
+    location = (gate.location or gate.name).strip()
+    session_worker = getattr(session, "worker", None) or {}
+    worker_name = worker.name if worker is not None else session_worker.get("name")
+    missing = [PPE_REASON_NAMES[reason] for reason in session.reasons if reason in PPE_REASON_NAMES]
+    if missing and worker_name:
+        items = _join_words([f"a {item}" for item in missing])
+        return (
+            "PPE_VIOLATION",
+            f"{worker_name} entered {location} without {items}. "
+            f"Missing required PPE: {_join_words(missing)}.",
+        )
+
+    readable_reasons = [
+        REASON_LABELS.get(reason, reason.replace("_", " ").lower())
+        for reason in session.reasons
+    ]
+    exact_reason = _join_words(readable_reasons) or "entry requires review"
+    if not worker_name:
+        return (
+            "IDENTITY_VIOLATION",
+            f"Unidentified person detected at {location}. Exact reason: {exact_reason}.",
+        )
+    return (
+        "ENTRY_VIOLATION",
+        f"{worker_name}'s entry was blocked at {location}. Exact reason: {exact_reason}.",
+    )
 
 
 def _worker_for_session(db: Session, session: EntrySession) -> Worker | None:
@@ -47,6 +96,9 @@ def persist_entry_session(db: Session, session: EntrySession) -> GateEvent:
         raise RuntimeError(f"Gate '{gate.name}' requires latitude and longitude")
 
     worker = _worker_for_session(db, session)
+    if worker is not None and session.worker is not None:
+        session.worker["name"] = worker.name
+        session.worker["employee_code"] = worker.employee_code
     result = session.result()
     visual = result["evidence"]["visual"]
     now = datetime.now(timezone.utc)
@@ -133,13 +185,13 @@ def persist_entry_session(db: Session, session: EntrySession) -> GateEvent:
 
     if session.verdict in {"DENIED", "HOLD"}:
         severity = "CRITICAL" if session.verdict == "DENIED" else "WARNING"
-        message = ", ".join(reason.replace("_", " ").title() for reason in session.reasons) or "Entry requires review"
+        alert_type, message = entry_alert_details(session, worker, gate)
         db.add(Alert(
             event_id=session.id,
             gate_id=gate.gate_id,
             log_id=compliance.log_id if compliance else None,
             worker_id=worker.worker_id if worker else None,
-            alert_type="PPE_ENTRY_DECISION",
+            alert_type=alert_type,
             severity=severity,
             message=message,
             status="ACTIVE",
