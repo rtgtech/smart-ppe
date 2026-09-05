@@ -6,7 +6,7 @@ from app.schemas.common import OrmModel, datetime
 
 
 class PpeItemBase(BaseModel):
-    name: Literal["Gloves", "Goggles", "Helmet", "Mask", "Shoes"]
+    name: Literal["Gloves", "Goggles", "Helmet", "Mask", "Shoes", "Vest"]
     is_mandatory: Literal[True] = True
 
 
@@ -15,7 +15,7 @@ class PpeItemCreate(PpeItemBase):
 
 
 class PpeItemUpdate(BaseModel):
-    name: Literal["Gloves", "Goggles", "Helmet", "Mask", "Shoes"] | None = None
+    name: Literal["Gloves", "Goggles", "Helmet", "Mask", "Shoes", "Vest"] | None = None
     is_mandatory: Literal[True] | None = None
 
 

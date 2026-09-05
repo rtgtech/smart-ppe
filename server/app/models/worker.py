@@ -14,7 +14,7 @@ class Worker(Base):
 
     worker_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     employee_code: Mapped[str] = mapped_column(String(20), nullable=False, unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.department_id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False, index=True)
     phone: Mapped[str | None] = mapped_column(String(15))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")

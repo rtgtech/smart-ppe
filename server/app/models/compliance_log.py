@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -13,6 +13,9 @@ class ComplianceLog(Base):
         CheckConstraint("compliance_score >= 0 AND compliance_score <= 100", name="ck_compliance_logs_compliance_score"),
         CheckConstraint("confidence_score IS NULL OR (confidence_score >= 0 AND confidence_score <= 100)", name="ck_compliance_logs_confidence_score"),
         CheckConstraint("sync_status IN ('PENDING', 'SYNCED', 'FAILED')", name="ck_compliance_logs_sync_status"),
+        CheckConstraint("data_origin IN ('LIVE', 'MANUAL', 'DEMO', 'IMPORTED')", name="ck_compliance_logs_data_origin"),
+        Index("ix_compliance_worker_entry", "worker_id", "entry_time"),
+        Index("ix_compliance_status_entry", "overall_status", "entry_time"),
     )
 
     log_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -27,6 +30,7 @@ class ComplianceLog(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     offline_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sync_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
+    data_origin: Mapped[str] = mapped_column(String(16), nullable=False, default="IMPORTED", server_default="IMPORTED", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     worker = relationship("Worker", back_populates="compliance_logs")

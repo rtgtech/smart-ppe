@@ -3,7 +3,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.routes import entry, operations, workers
+from app.api.v1.routes import assistant_queries, entry, operations, voice, workers
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.init_db import init_db
@@ -72,6 +72,16 @@ app.include_router(
 
 app.include_router(
     entry.router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    assistant_queries.router,
+    prefix=settings.api_v1_prefix,
+)
+
+app.include_router(
+    voice.router,
     prefix=settings.api_v1_prefix,
 )
 

@@ -7,6 +7,8 @@ import uuid
 
 from fastapi import APIRouter, Header, HTTPException, Response, WebSocket, WebSocketDisconnect
 
+from app.db.session import SessionLocal
+from app.services.entry_persistence import persist_entry_session
 from app.services.entry_pipeline import entry_sessions
 from app.services.ppe_compliance import PersonTracker
 from app.services.vision import MAX_FRAME_BYTES, identity_frame, ppe_frame, vision_lock
@@ -21,6 +23,14 @@ def _session(session_id: str):
     if not session:
         raise HTTPException(404, "Entry session not found")
     return session
+
+
+def _persist_finalized_session(session) -> None:
+    db = SessionLocal()
+    try:
+        persist_entry_session(db, session)
+    finally:
+        db.close()
 
 
 @router.post("/attempts", status_code=201)
@@ -49,6 +59,11 @@ async def finalize_attempt(session_id: str):
     session = _session(session_id)
     if session.lifecycle == "ACTIVE":
         session.finish("HOLD", ["SCAN_CANCELLED"])
+    try:
+        await asyncio.to_thread(_persist_finalized_session, session)
+    except Exception as exc:
+        session.persistence_error = "Entry decision could not be saved"
+        raise HTTPException(500, session.persistence_error) from exc
     return session.result()
 
 
@@ -81,6 +96,12 @@ async def stream(websocket: WebSocket, session_id: str) -> None:
                         output, detections, persons, faces, quality, timings = await asyncio.to_thread(ppe_frame, frame, tracker)
                         session.add_ppe(persons, faces, quality["valid"])
                         metadata = {"faces": faces, "persons": persons, "detections": detections, **timings}
+                if session.lifecycle == "FINALIZED":
+                    try:
+                        await asyncio.to_thread(_persist_finalized_session, session)
+                    except Exception:
+                        session.persistence_error = "Entry decision could not be saved"
+                        await websocket.send_json({"type": "error", "message": session.persistence_error})
                 await websocket.send_json({"type": "frame_meta", "entry": session.result(), "quality": quality, **metadata})
                 await websocket.send_bytes(output)
                 if session.lifecycle == "FINALIZED":

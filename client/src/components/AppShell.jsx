@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mountain, Bell, User } from 'lucide-react';
 import CaveNav from './CaveNav';
 import MobileNav from './MobileNav';
 import ThemeToggle from './ThemeToggle';
+import VoiceControl from './VoiceControl';
+import { useVoiceAgent } from '../hooks/useVoiceAgent';
 
 function useClock() {
   const [time, setTime] = useState(new Date());
@@ -17,9 +19,47 @@ function useClock() {
 export default function AppShell({ children }) {
   const navigate = useNavigate();
   const time = useClock();
+  const voice = useVoiceAgent();
+  const { beginPushToTalk, endPushToTalk } = voice;
+  const controlHeld = useRef(false);
   const hh = String(time.getHours()).padStart(2, '0');
   const mm = String(time.getMinutes()).padStart(2, '0');
   const ss = String(time.getSeconds()).padStart(2, '0');
+
+  useEffect(() => {
+    const stopPushSession = () => {
+      if (!controlHeld.current) return;
+      controlHeld.current = false;
+      endPushToTalk();
+    };
+    const onKeyDown = (event) => {
+      if (event.code === 'ControlLeft') {
+        if (!event.repeat && !controlHeld.current) {
+          controlHeld.current = true;
+          beginPushToTalk();
+        }
+        return;
+      }
+      if (controlHeld.current) stopPushSession();
+    };
+    const onKeyUp = (event) => {
+      if (event.code === 'ControlLeft') stopPushSession();
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) stopPushSession();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', stopPushSession);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', stopPushSession);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [beginPushToTalk, endPushToTalk]);
 
   return (
     <div className="min-h-screen bg-bg relative">
@@ -70,6 +110,14 @@ export default function AppShell({ children }) {
       </main>
 
       <MobileNav />
+      <VoiceControl
+        status={voice.status}
+        mode={voice.mode}
+        error={voice.error}
+        transcript={voice.transcript}
+        onToggle={voice.toggleSession}
+        onDismissError={voice.clearError}
+      />
     </div>
   );
 }

@@ -172,6 +172,7 @@ def _attendance_row(log: AttendanceLog, db: Session | None = None) -> dict:
         "ppe": ppe_status,
         "status": "UNDERGROUND" if log.status in ["INSIDE", "PRESENT"] and not log.exit_time else "EXITED",
         "raw_status": log.status,
+        "data_origin": log.data_origin,
     }
 
 
@@ -193,6 +194,7 @@ def _compliance_row(log: ComplianceLog, db: Session | None = None) -> dict:
         "sync_status": log.sync_status,
         "type": "PPE verification",
         "status": log.sync_status.title() if log.sync_status else "Synced",
+        "data_origin": log.data_origin,
     }
     if event:
         row.update({
@@ -651,6 +653,7 @@ def check_in_worker(payload: CheckInRequest, db: Session = Depends(get_db)):
         gate_id=gate.gate_id,
         entry_time=now,
         status="PRESENT",
+        data_origin="MANUAL",
     )
     db.add(log)
     create_audit_log(
@@ -764,7 +767,8 @@ def create_attendance(
     )
 
     log = AttendanceLog(
-        **payload.model_dump()
+        **payload.model_dump(),
+        data_origin="MANUAL",
     )
 
     db.add(log)
@@ -943,7 +947,8 @@ def create_compliance(
     )
 
     log = ComplianceLog(
-        **payload.model_dump()
+        **payload.model_dump(),
+        data_origin="MANUAL",
     )
 
     db.add(log)

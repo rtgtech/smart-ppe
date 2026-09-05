@@ -65,6 +65,9 @@ py -3.11 -m venv .venv
 
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+
+# Create local backend configuration, then replace the API-key placeholder.
+Copy-Item .env.example .env
 ```
 
 If PowerShell prevents activation, the environment can be used without
@@ -92,7 +95,7 @@ Open two PowerShell terminals.
 ```powershell
 cd D:\smart-ppe\server
 .\.venv\Scripts\Activate.ps1
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --env-file .env
 ```
 
 Wait until model loading completes and Uvicorn reports that the application has
@@ -163,6 +166,9 @@ server:
 | `SURAKSHA_ROLE` | `edge` | Run as `edge` or `central` |
 | `CENTRAL_SYNC_URL` | Empty | Central API base URL for the durable outbox |
 | `SYNC_API_TOKEN` | Empty | Shared deployment secret for central ingestion |
+| `ASSISTANT_API_TOKEN` | Empty | Required `X-Assistant-Token` for the read-only assistant query API |
+| `GOOGLE_API_KEY` | Empty | Enables Gemini Live voice sessions; kept on the backend only |
+| `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Gemini Live model used for spoken conversations |
 | `ENTRY_IDENTITY_TIMEOUT_SECONDS` | `10` | Identity evidence deadline |
 | `ENTRY_EVIDENCE_TIMEOUT_SECONDS` | `15` | PPE evidence deadline |
 
@@ -171,6 +177,7 @@ default. To use another server, create `client/.env` containing:
 
 ```dotenv
 VITE_ENTRY_WS_URL=ws://127.0.0.1:8000/api/v1/entry/attempts
+VITE_VOICE_WS_URL=ws://127.0.0.1:8000/api/v1/voice/ws
 ```
 
 Restart Vite after changing client environment variables. Use `wss://` when the
@@ -188,6 +195,7 @@ client is served over HTTPS.
 - `GET /api/v1/entry/attempts/{session_id}` - read the transient session
 - `DELETE /api/v1/entry/attempts/{session_id}` - discard the transient session
 - `WS /api/v1/entry/attempts/{session_id}/stream` - stream annotated face and PPE frames
+- `WS /api/v1/voice/ws` - stream microphone and Gemini Live audio for the voice agent
 
 Each WebSocket `frame_meta` message includes the transient entry state, faces,
 PPE detections, person-level results, image quality, and inference timings. The

@@ -27,6 +27,8 @@ class EntrySession:
     identity: list[dict[str, Any]] = field(default_factory=list)
     ppe: list[dict[str, Any]] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
+    persisted: bool = False
+    persistence_error: str | None = None
     started: float = field(default_factory=time.monotonic)
     touched: float = field(default_factory=time.monotonic)
     identity_timeout: float = SETTINGS.entry_identity_timeout_seconds
@@ -100,6 +102,11 @@ class EntrySession:
         self.lifecycle, self.phase, self.verdict, self.reasons = "FINALIZED", "FINAL", verdict, reasons
         self.touched = time.monotonic()
 
+    def mark_persisted(self) -> None:
+        self.persisted = True
+        self.persistence_error = None
+        self.touched = time.monotonic()
+
     def result(self) -> dict[str, Any]:
         matches = [row for row in self.identity if row["state"] == "MATCH" and (not self.worker or row["person_id"] == self.worker["employee_code"])]
         confidence = round(statistics.median(float(row["similarity"]) for row in matches) * 100, 1) if matches else None
@@ -116,7 +123,9 @@ class EntrySession:
             },
             "identity_confidence": confidence, "ppe_confidence": evidence_confidence, "evidence_confidence": evidence_confidence,
             "interventions": {"barrier": "UNLOCKED" if self.verdict == "ALLOWED" else "LOCKED", "indicator": "GREEN" if self.verdict == "ALLOWED" else "RED" if self.verdict == "DENIED" else "AMBER"},
-            "persisted": False, "storage": "TRANSIENT_MEMORY",
+            "persisted": self.persisted,
+            "storage": "SQLITE" if self.persisted else "TRANSIENT_MEMORY",
+            "persistence_error": self.persistence_error,
         }
 
 

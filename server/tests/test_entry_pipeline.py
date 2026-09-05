@@ -97,6 +97,7 @@ class EntryPipelineTest(unittest.TestCase):
         with (
             patch("app.api.v1.routes.entry.identity_frame", return_value=identified),
             patch("app.api.v1.routes.entry.ppe_frame", return_value=compliant),
+            patch("app.api.v1.routes.entry._persist_finalized_session", side_effect=lambda session: session.mark_persisted()),
         ):
             created = client.post("/entry/attempts", headers={"Idempotency-Key": session_id}).json()
             self.assertFalse(created["persisted"])
@@ -107,7 +108,9 @@ class EntryPipelineTest(unittest.TestCase):
                     metadata = stream.receive_json()
                     stream.receive_bytes()
                 self.assertEqual(metadata["entry"]["verdict"], "ALLOWED")
-                self.assertEqual(stream.receive_json()["type"], "session_complete")
+                completed = stream.receive_json()
+                self.assertEqual(completed["type"], "session_complete")
+                self.assertTrue(completed["entry"]["persisted"])
         entry_sessions.discard(session_id)
 
 

@@ -10,6 +10,7 @@ from app.db.seed_ppe_data import PPE_CATALOG, seed_ppe_demo_data
 
 
 DEFAULT_PPE = tuple(PPE_CATALOG)
+ENTRY_PPE = ("Helmet", "Vest", "Shoes")
 
 DEFAULT_WORKERS = [
     ("WK10234", "Ramesh Kumar", "Mining", 92, "HIGH", 7),
@@ -226,8 +227,12 @@ def migrate_entry_schema() -> None:
     additions = {
         "compliance_logs": [
             ("event_id", "VARCHAR(36)"), ("final_verdict", "VARCHAR(16)"),
+            ("data_origin", "VARCHAR(16) NOT NULL DEFAULT 'IMPORTED'"),
         ],
-        "attendance_logs": [("event_id", "VARCHAR(36)")],
+        "attendance_logs": [
+            ("event_id", "VARCHAR(36)"),
+            ("data_origin", "VARCHAR(16) NOT NULL DEFAULT 'IMPORTED'"),
+        ],
         "alerts": [("event_id", "VARCHAR(36)"), ("gate_id", "INTEGER REFERENCES gates(gate_id) ON DELETE SET NULL")],
     }
     with engine.begin() as connection:
@@ -242,8 +247,15 @@ def migrate_entry_schema() -> None:
             "compliance_logs": (
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_compliance_logs_event_id ON compliance_logs(event_id)",
                 "CREATE INDEX IF NOT EXISTS ix_compliance_logs_final_verdict ON compliance_logs(final_verdict)",
+                "CREATE INDEX IF NOT EXISTS ix_compliance_logs_data_origin ON compliance_logs(data_origin)",
+                "CREATE INDEX IF NOT EXISTS ix_compliance_worker_entry ON compliance_logs(worker_id, entry_time DESC)",
+                "CREATE INDEX IF NOT EXISTS ix_compliance_status_entry ON compliance_logs(overall_status, entry_time DESC)",
             ),
-            "attendance_logs": ("CREATE UNIQUE INDEX IF NOT EXISTS ux_attendance_logs_event_id ON attendance_logs(event_id)",),
+            "attendance_logs": (
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_attendance_logs_event_id ON attendance_logs(event_id)",
+                "CREATE INDEX IF NOT EXISTS ix_attendance_logs_data_origin ON attendance_logs(data_origin)",
+                "CREATE INDEX IF NOT EXISTS ix_attendance_worker_entry ON attendance_logs(worker_id, entry_time DESC)",
+            ),
             "alerts": (
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_alerts_event_id ON alerts(event_id)",
                 "CREATE INDEX IF NOT EXISTS ix_alerts_gate_id ON alerts(gate_id)",
@@ -253,6 +265,24 @@ def migrate_entry_schema() -> None:
             if inspect(engine).has_table(table):
                 for statement in statements:
                     connection.exec_driver_sql(statement)
+        if inspect(engine).has_table("compliance_logs"):
+            connection.exec_driver_sql(
+                "UPDATE compliance_logs SET data_origin = 'DEMO' "
+                "WHERE image_url LIKE 'seed://ppe-history/%'"
+            )
+            connection.exec_driver_sql(
+                "UPDATE compliance_logs SET data_origin = 'LIVE' "
+                "WHERE event_id IS NOT NULL AND data_origin = 'IMPORTED'"
+            )
+        if inspect(engine).has_table("attendance_logs"):
+            connection.exec_driver_sql(
+                "UPDATE attendance_logs AS attendance SET data_origin = 'DEMO' "
+                "WHERE EXISTS (SELECT 1 FROM compliance_logs AS compliance "
+                "WHERE compliance.worker_id = attendance.worker_id "
+                "AND compliance.gate_id = attendance.gate_id "
+                "AND compliance.entry_time = attendance.entry_time "
+                "AND compliance.data_origin = 'DEMO')"
+            )
 
 
 def migrate_worker_schema() -> None:
@@ -270,6 +300,8 @@ def migrate_worker_schema() -> None:
             for column_name in ("email", "photo_url", "designation", "rfid_uid"):
                 if column_name in worker_columns:
                     connection.exec_driver_sql(f"ALTER TABLE workers DROP COLUMN {column_name}")
+        with engine.begin() as connection:
+            connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_workers_name ON workers(name)")
 
     if inspector.has_table("worker_ppe"):
         assignment_columns = {column["name"] for column in inspector.get_columns("worker_ppe")}
@@ -342,10 +374,12 @@ def seed_initial_data(db: Session) -> None:
         db.delete(legacy_department)
     db.flush()
 
-    for ppe_name in DEFAULT_PPE:
+    for ppe_name in dict.fromkeys((*DEFAULT_PPE, *ENTRY_PPE)):
         exists = db.query(PpeItem).filter(PpeItem.name == ppe_name).one_or_none()
         if exists is None:
             db.add(PpeItem(name=ppe_name, is_mandatory=True))
+        elif ppe_name in ENTRY_PPE:
+            exists.is_mandatory = True
 
     gate = db.query(Gate).filter(Gate.mine_id == mine.mine_id, Gate.name == "Gate 01").one_or_none()
     if gate is None:

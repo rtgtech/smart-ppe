@@ -170,6 +170,7 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
                 image_url=marker,
                 offline_flag=day_offset % 11 == 0 and worker_index == 3,
                 sync_status="SYNCED",
+                data_origin="DEMO",
             )
             db.add(log)
             db.flush()
@@ -199,4 +200,5 @@ def seed_ppe_demo_data(db: Session, history_days: int = 30) -> None:
                     entry_time=entry_time,
                     exit_time=entry_time + timedelta(hours=8) if check_date < today else None,
                     status="OUTSIDE" if check_date < today or detected_count < len(detection_rows) else "INSIDE",
+                    data_origin="DEMO",
                 ))
